@@ -6,17 +6,17 @@ import { requestReset } from '../data/api.js'
 const email = ref('')
 const erro = ref('')
 const enviado = ref(false)
-const linkMock = ref('')
 
 async function enviar() {
   erro.value = ''
   const r = await requestReset(email.value)
   if (!r.ok) {
-    erro.value = 'Não encontramos esse e-mail no cadastro do lançamento.'
+    erro.value = r.code === 'NOT_REGISTERED'
+      ? 'Não encontramos esse e-mail no cadastro do lançamento.'
+      : 'Não foi possível enviar o e-mail agora. Tente novamente em instantes.'
     return
   }
   enviado.value = true
-  linkMock.value = r.link // Fase 2: e-mail real via Supabase; no mock mostramos o link
 }
 </script>
 
@@ -39,12 +39,7 @@ async function enviar() {
       </template>
 
       <template v-else>
-        <div class="alert ok">Pronto! Enviamos um link de redefinição para <strong>{{ email }}</strong>. Confira sua caixa de entrada.</div>
-        <div class="mock glass">
-          <strong>Modo demonstração</strong>
-          <span>Como ainda não há e-mail real (isso vem com o Supabase), use o link abaixo:</span>
-          <a class="link" :href="linkMock">Abrir link de redefinição</a>
-        </div>
+        <div class="alert ok">Pronto! Enviamos um link de redefinição para <strong>{{ email }}</strong>. Confira sua caixa de entrada (e o spam).</div>
       </template>
 
       <div class="rodape">
@@ -62,6 +57,4 @@ h1 { text-align: center; margin: 4px 0 6px; font-size: 22px; }
 .sub { text-align: center; margin: 0 0 18px; font-size: 14px; }
 .form { display: flex; flex-direction: column; gap: 14px; }
 .rodape { text-align: center; margin-top: 18px; }
-.mock { margin-top: 14px; padding: 12px 14px; display: flex; flex-direction: column; gap: 4px; font-size: 12.5px; color: var(--ink-2); }
-.mock strong { color: var(--accent); font-size: 11px; letter-spacing: .08em; text-transform: uppercase; }
 </style>

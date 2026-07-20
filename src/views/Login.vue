@@ -2,7 +2,7 @@
 import { ref } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import LogoCNHF from '../components/LogoCNHF.vue'
-import { login, AUTH_INFO } from '../data/api.js'
+import { login } from '../data/api.js'
 
 const router = useRouter()
 const route = useRoute()
@@ -19,7 +19,7 @@ async function entrar() {
   if (!r.ok) {
     erro.value = r.code === 'NOT_REGISTERED'
       ? 'Não encontramos esse e-mail no cadastro do lançamento. Use o mesmo e-mail que você usou para se inscrever.'
-      : 'Senha incorreta. A senha padrão é 12345678, ou use "Esqueci minha senha".'
+      : 'E-mail ou senha incorretos. Se precisar, use "Esqueci minha senha".'
     return
   }
   // trava da pesquisa: sem pesquisa respondida, não libera o ambiente
@@ -46,7 +46,7 @@ async function entrar() {
         </label>
         <label class="field">
           <span>Senha</span>
-          <input type="password" v-model="senha" placeholder="senha padrão: 12345678" autocomplete="current-password" required />
+          <input type="password" v-model="senha" placeholder="sua senha" autocomplete="current-password" required />
         </label>
 
         <div v-if="erro" class="alert bad">{{ erro }}</div>
@@ -58,12 +58,8 @@ async function entrar() {
 
       <div class="rodape">
         <router-link class="link" :to="{ name: 'esqueci' }">Esqueci minha senha</router-link>
-      </div>
-
-      <div class="demo glass">
-        <strong>Modo demonstração</strong>
-        <span>Senha padrão: <code>{{ AUTH_INFO.senhaPadrao }}</code></span>
-        <span>E-mails de teste: {{ AUTH_INFO.leadsDemo.join(' · ') }}</span>
+        <span class="sep">·</span>
+        <router-link class="link" :to="{ name: 'criar-acesso' }">Criar meu acesso</router-link>
       </div>
     </div>
   </div>
@@ -76,8 +72,6 @@ async function entrar() {
 h1 { text-align: center; margin: 4px 0 2px; font-size: 24px; }
 .sub { text-align: center; margin: 0 0 20px; font-size: 14px; }
 .form { display: flex; flex-direction: column; gap: 14px; }
-.rodape { text-align: center; margin-top: 16px; }
-.demo { margin-top: 20px; padding: 12px 14px; display: flex; flex-direction: column; gap: 3px; font-size: 12px; color: var(--ink-2); }
-.demo strong { color: var(--accent); font-size: 11px; letter-spacing: .08em; text-transform: uppercase; }
-code { background: var(--accent-soft); padding: 1px 6px; border-radius: 5px; font-weight: 700; color: var(--accent); }
+.rodape { text-align: center; margin-top: 16px; display: flex; gap: 8px; justify-content: center; align-items: center; flex-wrap: wrap; }
+.sep { color: var(--ink-2); }
 </style>

@@ -7,13 +7,27 @@ Ambiente do aluno + pesquisa de qualificação do **Curso Nacional de Formação
 
 - **Front-end:** Vue 3 + Vue Router (hash history) + Vite
 - **Servidor:** Express (`server.js`) servindo o build estático
-- **Dados (Fase 1):** mock em `localStorage` (`src/data/api.js`)
-- **Dados (Fase 2, planejado):** Supabase (`auth`, tabelas `leads`, `respostas_pesquisa`, `progresso`)
-  chamado direto do browser, mantendo as mesmas assinaturas de `src/data/api.js`
+- **Dados/Auth:** **Supabase** (projeto principal do Grupo Participa, schema `workbook`),
+  chamado direto do browser via `@supabase/supabase-js` (`src/data/api.js` + `src/data/supabase.js`).
+  Auth nativo Supabase. Tabelas: `leads`, `perfis`, `respostas_pesquisa`, `progresso`, `anotacoes`.
 
-> O app é hoje **100% front-end**. O `server.js` existe para permitir deploy como
-> **Node app** (Hostinger Node.js, Render, Railway…). Se o alvo for hospedagem
-> **estática** pura, basta subir o conteúdo de `dist/` — nesse caso o servidor não é usado.
+> O front fala direto com o Supabase. O `server.js` serve o build como **Node app**
+> (Hostinger Node.js, Render, Railway…). Se o alvo for hospedagem **estática** pura,
+> basta subir `dist/` — o servidor não é obrigatório, mas as envs `VITE_*` precisam
+> estar presentes **no momento do build** (o Vite as injeta no bundle).
+
+## Configuração (Supabase)
+
+Crie um `.env` na raiz (veja `.env.example`) — **não é versionado**:
+
+```
+VITE_SUPABASE_URL=https://mbvybujpkwuorhtdzcde.supabase.co
+VITE_SUPABASE_ANON_KEY=<anon key do projeto>
+```
+
+Como o Vite injeta as variáveis `VITE_*` no bundle em tempo de build, elas precisam
+estar disponíveis quando `npm run build` roda (no CI/plataforma, configure-as como
+variáveis de ambiente do build).
 
 ## Requisitos
 
@@ -72,8 +86,10 @@ src/
   styles.css
   components/          # LogoCNHF, PieChart
   data/
-    api.js             # camada de dados/auth (mock → Supabase na Fase 2)
+    supabase.js        # client supabase-js (schema workbook)
+    api.js             # camada de dados/auth sobre o Supabase
     survey-schema.js   # schema da pesquisa
-  views/               # Login, EsqueciSenha, RedefinirSenha, Pesquisa, Ambiente, Resultados
+  views/               # Login, CriarAcesso, EsqueciSenha, RedefinirSenha,
+                       # Pesquisa, Ambiente, Anotacoes, Resultados
 public/                # favicon
 ```

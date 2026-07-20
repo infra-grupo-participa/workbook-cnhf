@@ -66,6 +66,7 @@ function sair() { logout(); router.push({ name: 'login' }) }
     <header class="top card">
       <LogoCNHF :height="34" />
       <div class="acts">
+        <button class="btn ghost" @click="router.push({ name: 'anotacoes' })">Minhas anotações</button>
         <button class="btn ghost" @click="abrirSenha = !abrirSenha">Trocar senha</button>
         <button class="btn" @click="sair">Sair</button>
       </div>
@@ -122,7 +123,7 @@ function sair() { logout(); router.push({ name: 'login' }) }
           </div>
         </article>
       </div>
-      <p class="nota muted">O exercício só potencializa o resultado depois da aula. Na Fase 2 (Supabase) a presença e o exercício de cada aula ficam salvos no seu progresso.</p>
+      <p class="nota muted">O exercício só potencializa o resultado depois da aula. A sua presença e o exercício de cada aula ficam salvos no seu progresso.</p>
     </section>
 
     <!-- pop-up: tentou fazer o exercício sem ter assistido -->

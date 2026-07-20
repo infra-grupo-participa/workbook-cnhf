@@ -1,202 +1,288 @@
 /* ============================================================
-   CAMADA DE DADOS + AUTENTICAÇÃO — Fase 1: MOCK (localStorage)
+   CAMADA DE DADOS + AUTENTICAÇÃO — Fase 2: SUPABASE
    ------------------------------------------------------------
-   FASE 2 (Supabase): trocar o corpo destas funções por chamadas
-   supabase-js, mantendo as MESMAS assinaturas. Mapeamento:
+   Projeto principal do Grupo Participa (mbvybujpkwuorhtdzcde),
+   schema `workbook`. Auth nativo Supabase.
 
-     login()            → supabase.auth.signInWithPassword()
-     requestReset()     → supabase.auth.resetPasswordForEmail()  (e-mail nativo)
-     resetPassword()    → supabase.auth.updateUser({ password })
-     changePassword()   → supabase.auth.updateUser({ password })
-     isRegisteredLead() → select em `leads` (sincronizada com o CRM)
-     submitSurvey()     → insert em `respostas_pesquisa`
-     getAllResults()    → select em `respostas_pesquisa` (RLS: só admin)
-
-   A "base de leads" abaixo simula o CRM. Na Fase 2 ela vem da tabela
-   `leads`, alimentada pela página de captura / ActiveCampaign / Clickmax.
+   As assinaturas são mantidas iguais às da Fase 1 (mock) para não
+   quebrar as views. `currentUser()` continua SÍNCRONO: lê de um
+   cache de sessão populado no boot (initAuth) e mantido pelo
+   onAuthStateChange.
    ============================================================ */
 
-const DEFAULT_PASSWORD = '12345678'
+import { supabase } from './supabase.js'
 
-// --- base de leads simulada (quem se cadastrou no lançamento) ---
-const SEED_LEADS = [
-  { email: 'arthur@advmais.com', nome: 'Arthur Galvão', profissao: 'Advogado(a)' },
-  { email: 'joao@advmais.com', nome: 'João Pedro', profissao: 'Advogado(a)' },
-  { email: 'teste.advogado@gmail.com', nome: 'Advogado Teste', profissao: 'Advogado(a)' },
-  { email: 'teste.contador@gmail.com', nome: 'Contador Teste', profissao: 'Contador(a)' },
-]
-
-// --- helpers de storage ---
 const norm = (e) => (e || '').trim().toLowerCase()
-const read = (k, fb) => { try { return JSON.parse(localStorage.getItem(k)) ?? fb } catch { return fb } }
-const write = (k, v) => localStorage.setItem(k, JSON.stringify(v))
 
-const K_LEADS = 'wb-leads'
-const K_USERS = 'wb-users'     // { email: { password, nome } }
-const K_RESP = 'wb-respostas'  // [ { email, nome, ts, answers } ]
-const K_RESET = 'wb-reset'     // { token: email }
-const K_SESSION = 'wb-session' // email
+// --- cache de sessão (para currentUser() síncrono) ---
+let _session = null
+let _perfil = null // { nome, role }
 
-function leadsBase() {
-  const extra = read(K_LEADS, [])
-  const map = {}
-  for (const l of [...SEED_LEADS, ...extra]) map[norm(l.email)] = l
-  return map
+function setSession(session) {
+  _session = session
+  if (!session) _perfil = null
+}
+
+/**
+ * Inicializa a sessão antes de montar o app. Chame em main.js e
+ * só monte depois de resolver, para o 1º render já ter o usuário.
+ */
+export async function initAuth() {
+  const { data } = await supabase.auth.getSession()
+  setSession(data.session)
+  supabase.auth.onAuthStateChange((_evt, session) => setSession(session))
+  if (_session) await loadPerfil()
+}
+
+async function loadPerfil() {
+  if (!_session) { _perfil = null; return null }
+  const { data } = await supabase
+    .from('perfis')
+    .select('nome, role')
+    .eq('user_id', _session.user.id)
+    .maybeSingle()
+  _perfil = data || { nome: '', role: 'aluno' }
+  return _perfil
+}
+
+// ============================================================
+// SESSÃO
+// ============================================================
+/** e-mail do usuário logado (síncrono) ou null */
+export function currentUser() {
+  return _session?.user?.email ?? null
+}
+export function currentUserId() {
+  return _session?.user?.id ?? null
+}
+export async function logout() {
+  await supabase.auth.signOut()
+  setSession(null)
 }
 
 // ============================================================
 // LEADS
 // ============================================================
 export async function isRegisteredLead(email) {
-  return !!leadsBase()[norm(email)]
+  const { data, error } = await supabase.rpc('email_eh_lead', { p_email: norm(email) })
+  if (error) return false
+  return !!data
 }
-export async function getLead(email) {
-  return leadsBase()[norm(email)] ?? null
+
+/** dados do lead/perfil do usuário logado (para saudação no ambiente) */
+export async function getLead(_email) {
+  if (_perfil) return _perfil
+  return await loadPerfil()
 }
 
 // ============================================================
 // AUTENTICAÇÃO
 // ============================================================
-function users() { return read(K_USERS, {}) }
-function saveUsers(u) { write(K_USERS, u) }
-
-/** Garante um registro de usuário com a senha padrão na 1ª vez. */
-function ensureUser(email) {
-  const e = norm(email)
-  const all = users()
-  if (!all[e]) {
-    const lead = leadsBase()[e]
-    all[e] = { password: DEFAULT_PASSWORD, nome: lead?.nome ?? '' }
-    saveUsers(all)
-  }
-  return all[e]
-}
-
 /**
  * login → { ok, code, surveyDone }
- * códigos de erro: NOT_REGISTERED (e-mail não está no cadastro) | BAD_PASSWORD
+ * códigos de erro: NOT_REGISTERED | BAD_PASSWORD
  */
 export async function login(email, password) {
   const e = norm(email)
-  if (!(await isRegisteredLead(e))) return { ok: false, code: 'NOT_REGISTERED' }
-  const u = ensureUser(e)
-  if (password !== u.password) return { ok: false, code: 'BAD_PASSWORD' }
-  write(K_SESSION, e)
-  return { ok: true, surveyDone: await hasSurvey(e) }
+  const { data, error } = await supabase.auth.signInWithPassword({ email: e, password })
+  if (error) {
+    // distingue "e-mail não cadastrado no lançamento" de "senha errada"
+    const ehLead = await isRegisteredLead(e)
+    return { ok: false, code: ehLead ? 'BAD_PASSWORD' : 'NOT_REGISTERED' }
+  }
+  setSession(data.session)
+  await loadPerfil()
+  return { ok: true, surveyDone: await hasSurvey() }
 }
 
-export function currentUser() { return read(K_SESSION, null) }
-export function logout() { localStorage.removeItem(K_SESSION) }
-
-export async function changePassword(email, atual, nova) {
+/**
+ * Auto-cadastro por convite (link público /criar-acesso).
+ * Cria o usuário no Auth com metadata sistema='workbook' (o trigger
+ * cria perfil + lead). Retorna { ok, code, needsConfirm }.
+ * códigos: EXISTS (e-mail já tem acesso) | ERROR
+ */
+export async function signUpConvite({ email, nome, senha, profissao }) {
   const e = norm(email)
-  const all = users()
-  if (!all[e]) return { ok: false, code: 'NOT_FOUND' }
-  if (all[e].password !== atual) return { ok: false, code: 'BAD_PASSWORD' }
-  all[e].password = nova
-  saveUsers(all)
+  const { data, error } = await supabase.auth.signUp({
+    email: e,
+    password: senha,
+    options: {
+      data: { sistema: 'workbook', nome: nome || '', profissao: profissao || null },
+      emailRedirectTo: `${location.origin}${location.pathname}`,
+    },
+  })
+  if (error) {
+    const code = /already|exist|registered/i.test(error.message) ? 'EXISTS' : 'ERROR'
+    return { ok: false, code, message: error.message }
+  }
+  // Se o projeto exigir confirmação de e-mail, não há sessão ainda.
+  const needsConfirm = !data.session
+  if (data.session) { setSession(data.session); await loadPerfil() }
+  return { ok: true, needsConfirm }
+}
+
+/**
+ * changePassword — auth nativo não checa a senha atual, então
+ * revalidamos com um signIn silencioso para manter a UX de erro.
+ */
+export async function changePassword(email, atual, nova) {
+  const e = norm(email) || currentUser()
+  const check = await supabase.auth.signInWithPassword({ email: e, password: atual })
+  if (check.error) return { ok: false, code: 'BAD_PASSWORD' }
+  const { error } = await supabase.auth.updateUser({ password: nova })
+  if (error) return { ok: false, code: 'ERROR', message: error.message }
   return { ok: true }
 }
 
 /**
- * requestReset → simula o e-mail de redefinição.
- * Fase 2: supabase.auth.resetPasswordForEmail(email) envia de verdade.
- * No mock, devolvemos o token/link para exibir na tela.
+ * requestReset — envia o e-mail nativo de redefinição do Supabase.
+ * (não expõe mais link mock). Retorna { ok, code }.
  */
 export async function requestReset(email) {
   const e = norm(email)
   if (!(await isRegisteredLead(e))) return { ok: false, code: 'NOT_REGISTERED' }
-  const token = 'rt_' + Math.abs(hashStr(e + K_RESET + navigator.userAgent)).toString(36)
-  const map = read(K_RESET, {})
-  map[token] = e
-  write(K_RESET, map)
-  return { ok: true, token, link: `${location.origin}${location.pathname}#/redefinir-senha?token=${token}` }
+  const { error } = await supabase.auth.resetPasswordForEmail(e, {
+    redirectTo: `${location.origin}${location.pathname}#/redefinir-senha`,
+  })
+  if (error) return { ok: false, code: 'ERROR', message: error.message }
+  return { ok: true }
 }
 
-export async function resetPassword(token, nova) {
-  const map = read(K_RESET, {})
-  const e = map[token]
-  if (!e) return { ok: false, code: 'BAD_TOKEN' }
-  const all = users()
-  ensureUser(e)
-  all[e].password = nova
-  saveUsers(all)
-  delete map[token]
-  write(K_RESET, map)
-  return { ok: true, email: e }
+/**
+ * resetPassword — no fluxo Supabase o usuário chega em /redefinir-senha
+ * já com uma sessão de recovery (detectSessionInUrl). O token do link
+ * é ignorado; apenas trocamos a senha do usuário atual.
+ */
+export async function resetPassword(_token, nova) {
+  const { error } = await supabase.auth.updateUser({ password: nova })
+  if (error) return { ok: false, code: 'BAD_TOKEN', message: error.message }
+  return { ok: true, email: currentUser() }
 }
 
 // ============================================================
 // PESQUISA
 // ============================================================
-export async function hasSurvey(email) {
-  const e = norm(email)
-  return read(K_RESP, []).some((r) => r.email === e)
+export async function hasSurvey(_email) {
+  const uid = currentUserId()
+  if (!uid) return false
+  const { count } = await supabase
+    .from('respostas_pesquisa')
+    .select('user_id', { count: 'exact', head: true })
+    .eq('user_id', uid)
+  return (count ?? 0) > 0
 }
 
-export async function submitSurvey(email, answers) {
-  const e = norm(email)
-  const lead = leadsBase()[e]
-  const list = read(K_RESP, [])
-  // não duplica: se já respondeu, atualiza
-  const idx = list.findIndex((r) => r.email === e)
-  const registro = { email: e, nome: lead?.nome ?? '', ts: nowTs(), answers }
-  if (idx >= 0) list[idx] = registro
-  else list.push(registro)
-  write(K_RESP, list)
+export async function submitSurvey(_email, answers) {
+  const uid = currentUserId()
+  if (!uid) return { ok: false, code: 'NO_SESSION' }
+  const registro = {
+    user_id: uid,
+    email: currentUser(),
+    nome: _perfil?.nome ?? '',
+    answers,
+    atualizado_em: new Date().toISOString(),
+  }
+  const { error } = await supabase
+    .from('respostas_pesquisa')
+    .upsert(registro, { onConflict: 'user_id' })
+  if (error) return { ok: false, code: 'ERROR', message: error.message }
   return { ok: true }
 }
 
+/** getAllResults — admin only (RLS libera admin a ler todas). */
 export async function getAllResults() {
-  return read(K_RESP, []).slice().sort((a, b) => b.ts - a.ts)
+  const { data, error } = await supabase
+    .from('respostas_pesquisa')
+    .select('email, nome, answers, criado_em, atualizado_em')
+    .order('atualizado_em', { ascending: false })
+  if (error) return []
+  // normaliza p/ o mesmo formato que Resultados.vue espera (ts + answers)
+  return (data || []).map((r) => ({
+    email: r.email,
+    nome: r.nome,
+    answers: r.answers || {},
+    ts: r.atualizado_em || r.criado_em,
+  }))
 }
 
 // ============================================================
-// PRESENÇA + EXERCÍCIOS por aula (Fase 2: tabela `progresso`)
-// presenca: 'vivo' | 'replay' | 'nao' | null ; exercicio: boolean
+// PRESENÇA + EXERCÍCIOS por aula
 // ============================================================
-const K_PROG = 'wb-progresso' // { email: { aula1: { presenca, exercicio }, ... } }
-
-export async function getProgresso(email) {
-  const all = read(K_PROG, {})
-  return all[norm(email)] ?? {}
+export async function getProgresso(_email) {
+  const uid = currentUserId()
+  if (!uid) return {}
+  const { data, error } = await supabase
+    .from('progresso')
+    .select('aula, presenca, exercicio')
+    .eq('user_id', uid)
+  if (error) return {}
+  const map = {}
+  for (const r of data || []) map[r.aula] = { presenca: r.presenca, exercicio: r.exercicio }
+  return map
 }
-export async function setPresenca(email, aula, status) {
-  const e = norm(email)
-  const all = read(K_PROG, {})
-  all[e] = all[e] || {}
-  all[e][aula] = { ...(all[e][aula] || {}), presenca: status }
-  write(K_PROG, all)
-  return all[e][aula]
+export async function setPresenca(_email, aula, status) {
+  const uid = currentUserId()
+  if (!uid) return null
+  await supabase
+    .from('progresso')
+    .upsert({ user_id: uid, aula, presenca: status, atualizado_em: new Date().toISOString() },
+      { onConflict: 'user_id,aula' })
+  return { presenca: status }
 }
-export async function marcarExercicio(email, aula) {
-  const e = norm(email)
-  const all = read(K_PROG, {})
-  all[e] = all[e] || {}
-  all[e][aula] = { ...(all[e][aula] || {}), exercicio: true }
-  write(K_PROG, all)
-  return all[e][aula]
-}
-
-// ============================================================
-// utils (sem Date.now/Math.random para robustez do mock)
-// ============================================================
-let _seq = 0
-function nowTs() {
-  // timestamp monotônico simples; Fase 2: created_at do Supabase
-  const base = read('wb-tsbase', 0) || 1_753_000_000_000
-  _seq += 1
-  const t = base + _seq
-  write('wb-tsbase', t)
-  return t
-}
-function hashStr(s) {
-  let h = 0
-  for (let i = 0; i < s.length; i++) { h = (h << 5) - h + s.charCodeAt(i); h |= 0 }
-  return h
+export async function marcarExercicio(_email, aula) {
+  const uid = currentUserId()
+  if (!uid) return null
+  await supabase
+    .from('progresso')
+    .upsert({ user_id: uid, aula, exercicio: true, atualizado_em: new Date().toISOString() },
+      { onConflict: 'user_id,aula' })
+  return { exercicio: true }
 }
 
-export const AUTH_INFO = {
-  senhaPadrao: DEFAULT_PASSWORD,
-  leadsDemo: SEED_LEADS.map((l) => l.email),
+// ============================================================
+// ANOTAÇÕES — trilha / mapa mental do aluno ao longo do ciclo
+// ============================================================
+export async function listAnotacoes() {
+  const uid = currentUserId()
+  if (!uid) return []
+  const { data, error } = await supabase
+    .from('anotacoes')
+    .select('id, titulo, conteudo, aula, criado_em, atualizado_em')
+    .eq('user_id', uid)
+    .order('atualizado_em', { ascending: false })
+  if (error) return []
+  return data || []
+}
+export async function criarAnotacao({ titulo, conteudo, aula }) {
+  const uid = currentUserId()
+  if (!uid) return { ok: false }
+  const { data, error } = await supabase
+    .from('anotacoes')
+    .insert({ user_id: uid, titulo: titulo || '', conteudo: conteudo || '', aula: aula || null })
+    .select('id, titulo, conteudo, aula, criado_em, atualizado_em')
+    .single()
+  if (error) return { ok: false, message: error.message }
+  return { ok: true, anotacao: data }
+}
+export async function atualizarAnotacao(id, { titulo, conteudo, aula }) {
+  const { data, error } = await supabase
+    .from('anotacoes')
+    .update({ titulo, conteudo, aula: aula || null, atualizado_em: new Date().toISOString() })
+    .eq('id', id)
+    .select('id, titulo, conteudo, aula, criado_em, atualizado_em')
+    .single()
+  if (error) return { ok: false, message: error.message }
+  return { ok: true, anotacao: data }
+}
+export async function removerAnotacao(id) {
+  const { error } = await supabase.from('anotacoes').delete().eq('id', id)
+  return { ok: !error }
+}
+
+// ============================================================
+// ADMIN
+// ============================================================
+export async function isAdmin() {
+  if (!_perfil) await loadPerfil()
+  return _perfil?.role === 'admin'
 }

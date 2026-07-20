@@ -1,0 +1,6 @@
+node_modules/
+dist/
+.DS_Store
+# nunca commitar credenciais de FTP/Supabase
+.env
+.env.local

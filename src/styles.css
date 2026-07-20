@@ -1,0 +1,107 @@
+/* ============================================================
+   Workbook CNHF · tema (preto / branco / #FF6B00) · glass leve
+   Claro por padrão (ambiente de estudo), com dark opcional.
+   ============================================================ */
+:root {
+  --accent: #ff6b00;
+  --accent-strong: #ff8a33;
+  --accent-soft: rgba(255, 107, 0, 0.12);
+  --accent-line: rgba(255, 107, 0, 0.5);
+  --ok: #2fbf71;
+  --warn: #e2b93b;
+  --bad: #e5533d;
+  --radius: 16px;
+  --radius-sm: 10px;
+  font-family: -apple-system, 'Segoe UI', Inter, Roboto, sans-serif;
+
+  --bg: #f4f4f6;
+  --bg-orb: rgba(255, 107, 0, 0.10);
+  --surface: #ffffff;
+  --glass: rgba(255, 255, 255, 0.75);
+  --stroke: rgba(16, 16, 20, 0.10);
+  --stroke-strong: rgba(16, 16, 20, 0.2);
+  --ink: #14141a;
+  --ink-2: rgba(20, 20, 26, 0.62);
+  --ink-3: rgba(20, 20, 26, 0.4);
+  --shadow: 0 14px 40px rgba(16, 16, 20, 0.10);
+  color-scheme: light;
+}
+:root[data-theme='dark'] {
+  --bg: #0b0b0e;
+  --bg-orb: rgba(255, 107, 0, 0.14);
+  --surface: #16161b;
+  --glass: rgba(255, 255, 255, 0.05);
+  --stroke: rgba(255, 255, 255, 0.11);
+  --stroke-strong: rgba(255, 255, 255, 0.2);
+  --ink: #f5f5f7;
+  --ink-2: rgba(245, 245, 247, 0.62);
+  --ink-3: rgba(245, 245, 247, 0.38);
+  --shadow: 0 14px 40px rgba(0, 0, 0, 0.5);
+  color-scheme: dark;
+}
+
+* { box-sizing: border-box; }
+html, body, #app { min-height: 100%; }
+body {
+  margin: 0; background: var(--bg); color: var(--ink);
+  -webkit-font-smoothing: antialiased;
+}
+.bg-orbs {
+  position: fixed; inset: 0; z-index: 0; pointer-events: none;
+  background:
+    radial-gradient(600px 420px at 8% -10%, var(--bg-orb), transparent 60%),
+    radial-gradient(680px 500px at 100% 110%, var(--bg-orb), transparent 60%);
+}
+
+.card {
+  background: var(--surface); border: 1px solid var(--stroke);
+  border-radius: var(--radius); box-shadow: var(--shadow);
+}
+.glass {
+  background: var(--glass); border: 1px solid var(--stroke);
+  border-radius: var(--radius); backdrop-filter: blur(14px) saturate(150%);
+}
+
+.eyebrow { font-size: 10.5px; font-weight: 800; letter-spacing: 0.14em; text-transform: uppercase; color: var(--ink-3); }
+.muted { color: var(--ink-2); }
+h1, h2, h3 { letter-spacing: -0.01em; }
+
+/* botões */
+.btn {
+  display: inline-flex; align-items: center; justify-content: center; gap: 7px;
+  border: 1px solid var(--stroke); background: var(--surface); color: var(--ink);
+  font: inherit; font-size: 14px; font-weight: 600; padding: 11px 18px;
+  border-radius: var(--radius-sm); cursor: pointer; transition: border-color .15s, background .15s, transform .1s;
+}
+.btn:hover { border-color: var(--accent-line); }
+.btn:active { transform: scale(.98); }
+.btn:disabled { opacity: .5; cursor: not-allowed; }
+.btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+.btn.primary:hover { background: var(--accent-strong); }
+.btn.block { width: 100%; }
+.btn.ghost { background: transparent; }
+
+/* inputs */
+label.field { display: flex; flex-direction: column; gap: 6px; }
+label.field > span { font-size: 12.5px; font-weight: 700; color: var(--ink-2); }
+input[type=text], input[type=email], input[type=password], textarea, select {
+  font: inherit; font-size: 15px; color: var(--ink);
+  background: var(--surface); border: 1px solid var(--stroke-strong);
+  border-radius: var(--radius-sm); padding: 12px 14px; outline: none; width: 100%;
+}
+input:focus, textarea:focus, select:focus { border-color: var(--accent); }
+textarea { resize: vertical; min-height: 90px; }
+
+.alert { border-radius: var(--radius-sm); padding: 11px 14px; font-size: 13.5px; line-height: 1.5; border: 1px solid; }
+.alert.warn { color: #8a5a00; background: #fff6e6; border-color: #f0d28a; }
+.alert.bad { color: #8a2a1c; background: #fdecea; border-color: #f2b3aa; }
+.alert.ok { color: #1c6b45; background: #e9f8f0; border-color: #a8e0c4; }
+:root[data-theme='dark'] .alert.warn { color: #ffd782; background: rgba(226,185,59,.1); }
+:root[data-theme='dark'] .alert.bad { color: #ff9d90; background: rgba(229,83,61,.12); }
+:root[data-theme='dark'] .alert.ok { color: #86e3b4; background: rgba(47,191,113,.12); }
+
+.link { color: var(--accent); font-weight: 600; cursor: pointer; text-decoration: none; background: none; border: none; font: inherit; padding: 0; }
+.link:hover { text-decoration: underline; }
+
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-thumb { background: var(--stroke-strong); border-radius: 999px; }

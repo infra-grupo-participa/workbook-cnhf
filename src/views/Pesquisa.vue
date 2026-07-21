@@ -44,12 +44,74 @@ const respondida = computed(() => {
   return v != null && String(v).trim().length > 0
 })
 
+// erros por campo (para marcar o input em vermelho)
+const erros = ref({ nome: '', email: '', telefone: '' })
+
 const emailValido = (e) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(e || '').trim())
 
+// --- formatadores / máscaras (evitam dado quebrado entrando na planilha) ---
+
+// telefone BR: (XX) XXXXX-XXXX (celular) ou (XX) XXXX-XXXX (fixo). Só dígitos, máx 11.
+function formatarTelefone(v) {
+  const d = String(v || '').replace(/\D/g, '').slice(0, 11)
+  if (d.length === 0) return ''
+  if (d.length <= 2) return `(${d}`
+  if (d.length <= 6) return `(${d.slice(0, 2)}) ${d.slice(2)}`
+  if (d.length <= 10) return `(${d.slice(0, 2)}) ${d.slice(2, 6)}-${d.slice(6)}`
+  return `(${d.slice(0, 2)}) ${d.slice(2, 7)}-${d.slice(7)}`
+}
+function onTelefone(e) {
+  contato.value.telefone = formatarTelefone(e.target.value)
+  erros.value.telefone = ''
+}
+
+// nome: colapsa espaços e capitaliza cada palavra (exceto conectivos)
+function normalizarNome(v) {
+  const minus = new Set(['de', 'da', 'do', 'das', 'dos', 'e'])
+  return String(v || '').trim().replace(/\s+/g, ' ').toLowerCase()
+    .split(' ')
+    .map((w) => (minus.has(w) ? w : w.charAt(0).toUpperCase() + w.slice(1)))
+    .join(' ')
+}
+function blurNome() { contato.value.nome = normalizarNome(contato.value.nome); validarCampo('nome') }
+function blurEmail() { contato.value.email = String(contato.value.email || '').trim().toLowerCase(); validarCampo('email') }
+
+// validação por campo — retorna mensagem de erro (ou '')
+function checarNome() {
+  const n = normalizarNome(contato.value.nome)
+  if (!n) return 'Informe o seu nome completo.'
+  if (n.length < 3 || !/\s/.test(n)) return 'Informe nome e sobrenome.'
+  if (!/^[A-Za-zÀ-ÿ'’\s-]+$/.test(n)) return 'Use apenas letras no nome.'
+  return ''
+}
+function checarEmail() {
+  const e = String(contato.value.email || '').trim().toLowerCase()
+  if (!e) return 'Informe o seu e-mail.'
+  if (!emailValido(e)) return 'Informe um e-mail válido (ex.: nome@email.com).'
+  return ''
+}
+function checarTelefone() {
+  const d = String(contato.value.telefone || '').replace(/\D/g, '')
+  if (!d) return 'Informe o seu WhatsApp.'
+  if (d.length < 10 || d.length > 11) return 'WhatsApp inválido — use DDD + número.'
+  if (d[2] === '0') return 'Número de WhatsApp inválido.'
+  return ''
+}
+function validarCampo(campo) {
+  if (campo === 'nome') erros.value.nome = checarNome()
+  if (campo === 'email') erros.value.email = checarEmail()
+  if (campo === 'telefone') erros.value.telefone = checarTelefone()
+}
+
 function contatoValido() {
-  if (!contato.value.nome.trim()) { erro.value = 'Informe o seu nome.'; return false }
-  if (!emailValido(contato.value.email)) { erro.value = 'Informe um e-mail válido.'; return false }
-  if (contato.value.telefone.replace(/\D/g, '').length < 10) { erro.value = 'Informe um WhatsApp válido com DDD.'; return false }
+  erros.value.nome = checarNome()
+  erros.value.email = checarEmail()
+  erros.value.telefone = checarTelefone()
+  const primeiro = erros.value.nome || erros.value.email || erros.value.telefone
+  if (primeiro) { erro.value = primeiro; return false }
+  // normaliza os valores finais antes de seguir
+  contato.value.nome = normalizarNome(contato.value.nome)
+  contato.value.email = contato.value.email.trim().toLowerCase()
   return true
 }
 
@@ -130,8 +192,8 @@ async function entrarNoAmbiente() {
 <template>
   <div class="wrap">
     <header class="top">
-      <LogoCNHF :height="32" />
-      <span v-if="emailLogado" class="muted" style="font-size:12.5px">{{ emailLogado }}</span>
+      <LogoCNHF :height="34" />
+      <span v-if="emailLogado" class="quem muted">{{ emailLogado }}</span>
     </header>
 
     <div class="card box">
@@ -158,15 +220,30 @@ async function entrarNoAmbiente() {
           <div class="form">
             <label class="field">
               <span>Nome completo</span>
-              <input type="text" v-model="contato.nome" placeholder="Seu nome" autocomplete="name" @keydown.enter="avancar" />
+              <input
+                type="text" v-model="contato.nome" placeholder="Seu nome completo"
+                autocomplete="name" :class="{ invalido: erros.nome }"
+                @input="erros.nome = ''" @blur="blurNome" @keydown.enter="avancar"
+              />
+              <small v-if="erros.nome" class="erro-campo">{{ erros.nome }}</small>
             </label>
             <label class="field">
               <span>E-mail</span>
-              <input type="email" v-model="contato.email" placeholder="voce@email.com" autocomplete="email" @keydown.enter="avancar" />
+              <input
+                type="email" v-model="contato.email" placeholder="voce@email.com"
+                autocomplete="email" inputmode="email" :class="{ invalido: erros.email }"
+                @input="erros.email = ''" @blur="blurEmail" @keydown.enter="avancar"
+              />
+              <small v-if="erros.email" class="erro-campo">{{ erros.email }}</small>
             </label>
             <label class="field">
               <span>WhatsApp (com DDD)</span>
-              <input type="tel" v-model="contato.telefone" placeholder="(11) 99999-9999" autocomplete="tel" @keydown.enter="avancar" />
+              <input
+                type="tel" :value="contato.telefone" placeholder="(11) 99999-9999"
+                autocomplete="tel" inputmode="tel" maxlength="16" :class="{ invalido: erros.telefone }"
+                @input="onTelefone" @blur="validarCampo('telefone')" @keydown.enter="avancar"
+              />
+              <small v-if="erros.telefone" class="erro-campo">{{ erros.telefone }}</small>
             </label>
           </div>
         </div>
@@ -234,7 +311,10 @@ async function entrarNoAmbiente() {
 
 <style scoped>
 .wrap { position: relative; z-index: 1; max-width: 620px; margin: 0 auto; padding: 24px 18px 60px; }
-.top { display: flex; align-items: center; justify-content: space-between; color: var(--ink); margin-bottom: 18px; }
+/* logo sempre centralizado; e-mail do logado fica absoluto p/ não deslocar o logo */
+.top { position: relative; display: flex; align-items: center; justify-content: center; color: var(--ink); margin-bottom: 20px; }
+.top .quem { position: absolute; right: 0; top: 50%; transform: translateY(-50%); font-size: 12.5px; max-width: 40%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+@media (max-width: 520px) { .top .quem { display: none; } }
 .box { padding: 30px 32px; min-height: 380px; display: flex; flex-direction: column; }
 .progresso { margin: 12px 0 20px; }
 .barra { height: 8px; border-radius: 999px; background: var(--stroke); overflow: hidden; }
@@ -242,6 +322,7 @@ async function entrarNoAmbiente() {
 .q { flex: 1; }
 .q-label { font-size: 21px; font-weight: 700; line-height: 1.35; margin-bottom: 20px; }
 .form { display: flex; flex-direction: column; gap: 14px; }
+.erro-campo { color: var(--bad); font-size: 12px; font-weight: 600; margin-top: 2px; }
 .opcoes { display: flex; flex-direction: column; gap: 10px; }
 .op {
   text-align: left; font: inherit; font-size: 15px; color: var(--ink);

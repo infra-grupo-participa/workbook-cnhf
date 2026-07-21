@@ -11,6 +11,7 @@
    ============================================================ */
 
 import { supabase } from './supabase.js'
+import { avaliarSaude } from './health.js'
 
 const norm = (e) => (e || '').trim().toLowerCase()
 
@@ -184,7 +185,7 @@ export async function signUpComPesquisa({ email, nome, telefone, answers }) {
   // criado neste ponto — se o insert da pesquisa falhar (rede etc.), NÃO
   // travamos o lead com EXISTS numa retentativa: retornamos ok assim mesmo
   // (o acesso é o entregável) e sinalizamos surveyPending para uma retentativa.
-  const reg = await submitSurvey(e, answers, nome)
+  const reg = await submitSurvey(e, answers, nome, { telefone })
   return { ok: true, senha, email: e, surveyPending: !reg.ok }
 }
 
@@ -239,21 +240,52 @@ export async function hasSurvey(_email) {
   return (count ?? 0) > 0
 }
 
-export async function submitSurvey(_email, answers, nome) {
+export async function submitSurvey(_email, answers, nome, contato = {}) {
   const uid = currentUserId()
   if (!uid) return { ok: false, code: 'NO_SESSION' }
+  const email = currentUser()
+  const telefone = contato.telefone || null
+
+  // índice de saúde da resposta (qualidade + flags de priorização)
+  const { score, flags } = avaliarSaude({ nome: nome ?? _perfil?.nome, telefone, email, answers })
+
+  // deduplicação: já existe outra resposta com o mesmo e-mail ou telefone?
+  const duplicado = await ehDuplicado({ uid, email, telefone })
+
   const registro = {
     user_id: uid,
-    email: currentUser(),
+    email,
     nome: nome ?? _perfil?.nome ?? '',
+    telefone,
     answers,
+    health_score: score,
+    health_flags: flags,
+    duplicado,
     atualizado_em: new Date().toISOString(),
   }
   const { error } = await supabase
     .from('respostas_pesquisa')
     .upsert(registro, { onConflict: 'user_id' })
   if (error) return { ok: false, code: 'ERROR', message: error.message }
-  return { ok: true }
+  return { ok: true, score, flags, duplicado }
+}
+
+/**
+ * ehDuplicado — o lead já aparece em OUTRA resposta (mesmo e-mail normalizado
+ * ou mesmo telefone só-dígitos), de um user_id diferente? Marca p/ o dashboard
+ * priorizar/limpar. RLS só deixa o próprio user ler suas linhas, então a
+ * checagem cruzada real roda via RPC security definer (abaixo). Se a RPC não
+ * existir/ falhar, retorna false (não bloqueia o cadastro).
+ */
+async function ehDuplicado({ uid, email, telefone }) {
+  try {
+    const tel = (telefone || '').replace(/\D/g, '') || null
+    const { data, error } = await supabase.rpc('resposta_duplicada', {
+      p_user_id: uid, p_email: norm(email), p_telefone: tel,
+    })
+    if (error) return false
+    return !!data
+  } catch { return false }
 }
 
 /** getAllResults — admin only (RLS libera admin a ler todas). */

@@ -133,10 +133,29 @@ function voltar() {
   if (passo.value > (modoPublico ? -1 : 0)) passo.value--
 }
 
-// radio: seleciona e já avança (estilo etapa por etapa)
+// sub-campo condicional revelado pela opção escolhida na pergunta atual
+const condicionalAtual = computed(() => {
+  const q = atual.value
+  if (!q || !q.revela) return null
+  const escolhida = respostas.value[q.id]
+  return q.revela[escolhida] || null
+})
+
+// radio: seleciona. Se a opção revelar um sub-campo condicional, NÃO auto-avança
+// (deixa o lead preencher o "qual?"); senão, avança como antes.
 function escolher(op) {
-  respostas.value[atual.value.id] = op
+  const q = atual.value
+  respostas.value[q.id] = op
   erro.value = ''
+  // limpa sub-campos condicionais que não pertencem à opção agora escolhida
+  // (evita valor órfão de "qual?" quando o lead troca de resposta)
+  if (q.revela) {
+    for (const [gatilho, campo] of Object.entries(q.revela)) {
+      if (gatilho !== op) delete respostas.value[campo.id]
+    }
+  }
+  const revela = q.revela && q.revela[op]
+  if (revela) return                       // mostra o sub-campo; avança no botão
   setTimeout(() => { if (!ultima.value) passo.value++; }, 220)
 }
 
@@ -183,7 +202,7 @@ async function entrarNoAmbiente() {
   // se a gravação da pesquisa ficou pendente (falha transitória após o
   // acesso já criado), tenta de novo agora — o usuário está autenticado.
   if (acesso.value?.surveyPending) {
-    const reg = await submitSurvey(acesso.value.email, { ...respostas.value }, contato.value.nome)
+    const reg = await submitSurvey(acesso.value.email, { ...respostas.value }, contato.value.nome, { telefone: contato.value.telefone })
     if (reg.ok) acesso.value.surveyPending = false
   }
   // já está logado (o signUp criou a sessão) → vai direto pro ambiente
@@ -262,8 +281,20 @@ async function entrarNoAmbiente() {
             >{{ op }}</button>
           </div>
 
+          <!-- sub-campo condicional (desdobramento): ex. "Outra → qual?" -->
+          <Transition name="fade">
+            <label v-if="condicionalAtual" class="field condicional" :key="condicionalAtual.id">
+              <span>{{ condicionalAtual.label }}</span>
+              <input
+                type="text" v-model="respostas[condicionalAtual.id]"
+                :placeholder="condicionalAtual.placeholder"
+                @keydown.enter="avancar" autofocus
+              />
+            </label>
+          </Transition>
+
           <textarea
-            v-else v-model="respostas[atual.id]" :placeholder="atual.placeholder"
+            v-if="atual.tipo === 'textarea'" v-model="respostas[atual.id]" :placeholder="atual.placeholder"
             @keydown.ctrl.enter="avancar" @keydown.meta.enter="avancar" autofocus
           />
         </div>
@@ -329,6 +360,7 @@ async function entrarNoAmbiente() {
 .form { display: flex; flex-direction: column; gap: 14px; }
 .erro-campo { color: var(--bad); font-size: 12px; font-weight: 600; margin-top: 2px; }
 .opcoes { display: flex; flex-direction: column; gap: 10px; }
+.condicional { margin-top: 16px; padding-top: 16px; border-top: 1px solid var(--stroke); }
 .op {
   text-align: left; font: inherit; font-size: 15px; color: var(--ink);
   padding: 15px 18px; border: 1px solid var(--stroke-strong); border-radius: var(--radius-sm);

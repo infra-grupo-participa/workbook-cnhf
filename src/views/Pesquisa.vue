@@ -18,8 +18,9 @@ const emailLogado = currentUser()
 const modoPublico = !emailLogado
 const travado = route.query.motivo === 'trava'
 
-// dados de contato (só no modo público) — etapa 0
-const contato = ref({ nome: '', email: '', telefone: '' })
+// dados de contato (só no modo público) — etapa 0. Pedimos SÓ nome e e-mail
+// (o e-mail é a chave de cruzamento). WhatsApp não é coletado.
+const contato = ref({ nome: '', email: '' })
 
 const respostas = ref({})
 // passo -1 = etapa de contato (só público); 0..n-1 = perguntas
@@ -47,25 +48,11 @@ const respondida = computed(() => {
 })
 
 // erros por campo (para marcar o input em vermelho)
-const erros = ref({ nome: '', email: '', telefone: '' })
+const erros = ref({ nome: '', email: '' })
 
 const emailValido = (e) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(e || '').trim())
 
-// --- formatadores / máscaras (evitam dado quebrado entrando na planilha) ---
-
-// telefone BR: (XX) XXXXX-XXXX (celular) ou (XX) XXXX-XXXX (fixo). Só dígitos, máx 11.
-function formatarTelefone(v) {
-  const d = String(v || '').replace(/\D/g, '').slice(0, 11)
-  if (d.length === 0) return ''
-  if (d.length <= 2) return `(${d}`
-  if (d.length <= 6) return `(${d.slice(0, 2)}) ${d.slice(2)}`
-  if (d.length <= 10) return `(${d.slice(0, 2)}) ${d.slice(2, 6)}-${d.slice(6)}`
-  return `(${d.slice(0, 2)}) ${d.slice(2, 7)}-${d.slice(7)}`
-}
-function onTelefone(e) {
-  contato.value.telefone = formatarTelefone(e.target.value)
-  erros.value.telefone = ''
-}
+// --- formatadores (evitam dado quebrado entrando na planilha) ---
 
 // nome: colapsa espaços e capitaliza cada palavra (exceto conectivos)
 function normalizarNome(v) {
@@ -92,24 +79,15 @@ function checarEmail() {
   if (!emailValido(e)) return 'Informe um e-mail válido (ex.: nome@email.com).'
   return ''
 }
-function checarTelefone() {
-  const d = String(contato.value.telefone || '').replace(/\D/g, '')
-  if (!d) return 'Informe o seu WhatsApp.'
-  if (d.length < 10 || d.length > 11) return 'WhatsApp inválido — use DDD + número.'
-  if (d[2] === '0') return 'Número de WhatsApp inválido.'
-  return ''
-}
 function validarCampo(campo) {
   if (campo === 'nome') erros.value.nome = checarNome()
   if (campo === 'email') erros.value.email = checarEmail()
-  if (campo === 'telefone') erros.value.telefone = checarTelefone()
 }
 
 function contatoValido() {
   erros.value.nome = checarNome()
   erros.value.email = checarEmail()
-  erros.value.telefone = checarTelefone()
-  const primeiro = erros.value.nome || erros.value.email || erros.value.telefone
+  const primeiro = erros.value.nome || erros.value.email
   if (primeiro) { erro.value = primeiro; return false }
   // normaliza os valores finais antes de seguir
   contato.value.nome = normalizarNome(contato.value.nome)
@@ -169,7 +147,6 @@ async function finalizar() {
     const r = await signUpComPesquisa({
       email: contato.value.email,
       nome: contato.value.nome,
-      telefone: contato.value.telefone,
       answers: { ...respostas.value },
     })
     enviando.value = false
@@ -202,7 +179,7 @@ async function entrarNoAmbiente() {
   // se a gravação da pesquisa ficou pendente (falha transitória após o
   // acesso já criado), tenta de novo agora — o usuário está autenticado.
   if (acesso.value?.surveyPending) {
-    const reg = await submitSurvey(acesso.value.email, { ...respostas.value }, contato.value.nome, { telefone: contato.value.telefone })
+    const reg = await submitSurvey(acesso.value.email, { ...respostas.value }, contato.value.nome)
     if (reg.ok) acesso.value.surveyPending = false
   }
   // já está logado (o signUp criou a sessão) → vai direto pro ambiente
@@ -256,15 +233,6 @@ async function entrarNoAmbiente() {
                 @input="erros.email = ''" @blur="blurEmail" @keydown.enter="avancar"
               />
               <small v-if="erros.email" class="erro-campo">{{ erros.email }}</small>
-            </label>
-            <label class="field">
-              <span>WhatsApp (com DDD)</span>
-              <input
-                type="tel" :value="contato.telefone" placeholder="(11) 99999-9999"
-                autocomplete="tel" inputmode="tel" maxlength="16" :class="{ invalido: erros.telefone }"
-                @input="onTelefone" @blur="validarCampo('telefone')" @keydown.enter="avancar"
-              />
-              <small v-if="erros.telefone" class="erro-campo">{{ erros.telefone }}</small>
             </label>
           </div>
         </div>

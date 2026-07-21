@@ -3,8 +3,8 @@ import { ref, watch } from 'vue'
 import Sun from '@lucide/vue/dist/esm/icons/sun.mjs'
 import Moon from '@lucide/vue/dist/esm/icons/moon.mjs'
 
-// dark por padrão, com opção de alternar (salva a preferência)
-const theme = ref(localStorage.getItem('wb-theme') || 'dark')
+// light por padrão (ambiente de estudo), com opção de alternar (salva a preferência)
+const theme = ref(localStorage.getItem('wb-theme') || 'light')
 watch(theme, (t) => {
   document.documentElement.dataset.theme = t
   localStorage.setItem('wb-theme', t)

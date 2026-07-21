@@ -152,7 +152,7 @@ export function gerarSenha(len = 10) {
  * Retorna { ok, senha, email } em sucesso.
  * códigos de erro: EXISTS (e-mail já respondeu / já tem acesso) | ERROR
  */
-export async function signUpComPesquisa({ email, nome, telefone, answers }) {
+export async function signUpComPesquisa({ email, nome, answers }) {
   const e = norm(email)
   const senha = gerarSenha()
 
@@ -163,7 +163,6 @@ export async function signUpComPesquisa({ email, nome, telefone, answers }) {
       data: {
         sistema: 'workbook',
         nome: nome || '',
-        telefone: telefone || null,
       },
       emailRedirectTo: `${location.origin}${location.pathname}`,
     },
@@ -185,7 +184,7 @@ export async function signUpComPesquisa({ email, nome, telefone, answers }) {
   // criado neste ponto — se o insert da pesquisa falhar (rede etc.), NÃO
   // travamos o lead com EXISTS numa retentativa: retornamos ok assim mesmo
   // (o acesso é o entregável) e sinalizamos surveyPending para uma retentativa.
-  const reg = await submitSurvey(e, answers, nome, { telefone })
+  const reg = await submitSurvey(e, answers, nome)
   return { ok: true, senha, email: e, surveyPending: !reg.ok }
 }
 
@@ -240,23 +239,21 @@ export async function hasSurvey(_email) {
   return (count ?? 0) > 0
 }
 
-export async function submitSurvey(_email, answers, nome, contato = {}) {
+export async function submitSurvey(_email, answers, nome) {
   const uid = currentUserId()
   if (!uid) return { ok: false, code: 'NO_SESSION' }
   const email = currentUser()
-  const telefone = contato.telefone || null
 
   // índice de saúde da resposta (qualidade + flags de priorização)
-  const { score, flags } = avaliarSaude({ nome: nome ?? _perfil?.nome, telefone, email, answers })
+  const { score, flags } = avaliarSaude({ nome: nome ?? _perfil?.nome, email, answers })
 
-  // deduplicação: já existe outra resposta com o mesmo e-mail ou telefone?
-  const duplicado = await ehDuplicado({ uid, email, telefone })
+  // deduplicação: já existe outra resposta com o mesmo e-mail? (chave de cruzamento)
+  const duplicado = await ehDuplicado({ uid, email })
 
   const registro = {
     user_id: uid,
     email,
     nome: nome ?? _perfil?.nome ?? '',
-    telefone,
     answers,
     health_score: score,
     health_flags: flags,
@@ -271,17 +268,15 @@ export async function submitSurvey(_email, answers, nome, contato = {}) {
 }
 
 /**
- * ehDuplicado — o lead já aparece em OUTRA resposta (mesmo e-mail normalizado
- * ou mesmo telefone só-dígitos), de um user_id diferente? Marca p/ o dashboard
- * priorizar/limpar. RLS só deixa o próprio user ler suas linhas, então a
- * checagem cruzada real roda via RPC security definer (abaixo). Se a RPC não
- * existir/ falhar, retorna false (não bloqueia o cadastro).
+ * ehDuplicado — o lead já aparece em OUTRA resposta (mesmo e-mail normalizado),
+ * de um user_id diferente? Marca p/ o dashboard priorizar/limpar. RLS só deixa
+ * o próprio user ler suas linhas, então a checagem cruzada roda via RPC
+ * security definer. Se a RPC falhar, retorna false (não bloqueia o cadastro).
  */
-async function ehDuplicado({ uid, email, telefone }) {
+async function ehDuplicado({ uid, email }) {
   try {
-    const tel = (telefone || '').replace(/\D/g, '') || null
     const { data, error } = await supabase.rpc('resposta_duplicada', {
-      p_user_id: uid, p_email: norm(email), p_telefone: tel,
+      p_user_id: uid, p_email: norm(email), p_telefone: null,
     })
     if (error) return false
     return !!data

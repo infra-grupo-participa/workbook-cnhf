@@ -11,7 +11,6 @@
    só grava) — aqui só produzimos score + flags.
    ============================================================ */
 
-const soDigitos = (s) => String(s || '').replace(/\D/g, '')
 const limpo = (s) => String(s || '').trim().toLowerCase()
 
 // nomes de teclado/lixo comuns e placeholders
@@ -31,16 +30,6 @@ export function nomePlausivel(nome) {
   if (partes.some((p) => /(.)\1{2,}/.test(p))) return false // "aaaa", "jjjj"
   // muitas consoantes seguidas em qualquer parte → provável tecla batida
   if (partes.some((p) => /[bcdfghjklmnpqrstvwxyz]{5,}/i.test(p))) return false
-  return true
-}
-
-/** telefone BR válido (10-11 dígitos, DDD plausível, 3º dígito ≠ 0) */
-export function telefonePlausivel(tel) {
-  const d = soDigitos(tel)
-  if (d.length < 10 || d.length > 11) return false
-  if (Number(d.slice(0, 2)) < 11) return false           // DDD começa em 11
-  if (d[2] === '0') return false
-  if (/^(\d)\1+$/.test(d)) return false                   // 1111111111
   return true
 }
 
@@ -64,25 +53,26 @@ export function textoPlausivel(txt) {
  *   'concorrente'             → já usa método (identificar Pablo Arruda, Igor…)
  *   'nao_sabe_comecar'        → dor "não sei por onde começar"
  *   'area_outra'              → área fora de Advocacia/Contabilidade
- *   'suspeito_nome'/'suspeito_telefone'/'suspeito_texto' → possível lixo
+ *   'suspeito_nome'/'suspeito_email'/'suspeito_texto' → possível lixo
+ *
+ * Obs.: a pesquisa NÃO coleta telefone (só nome + e-mail; o e-mail é a chave
+ * de cruzamento). Peso: nome 35 + e-mail 30 + texto 20 + qualificação 15.
  */
-export function avaliarSaude({ nome, telefone, email, answers = {} }) {
+export function avaliarSaude({ nome, email, answers = {} }) {
   const flags = []
   let score = 0
 
   // --- qualidade do preenchimento (0-100) ---
   const okNome = nomePlausivel(nome)
-  const okTel = telefonePlausivel(telefone)
   const okEmail = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(limpo(email))
   const okTexto = textoPlausivel(answers.dificuldade)
 
-  if (okNome) score += 30; else flags.push('suspeito_nome')
-  if (okTel) score += 25; else flags.push('suspeito_telefone')
-  if (okEmail) score += 20; else flags.push('suspeito_email')
-  if (okTexto) score += 15; else flags.push('suspeito_texto')
+  if (okNome) score += 35; else flags.push('suspeito_nome')
+  if (okEmail) score += 30; else flags.push('suspeito_email')
+  if (okTexto) score += 20; else flags.push('suspeito_texto')
   // completou todas as perguntas de qualificação
   const qualif = ['area', 'atua_holding', 'faturamento', 'objetivo']
-  if (qualif.every((k) => answers[k])) score += 10
+  if (qualif.every((k) => answers[k])) score += 15
 
   // --- flags de negócio (priorização) ---
   if (answers.faturamento === 'Acima de R$ 30 mil') flags.push('prioridade_faturamento')

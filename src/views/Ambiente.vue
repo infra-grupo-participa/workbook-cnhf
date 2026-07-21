@@ -73,7 +73,7 @@ function sair() { logout(); router.push({ name: 'login' }) }
         e materiais aparecem aqui, dentro do seu ambiente.
       </p>
       <p class="muted aviso">
-        Fique de olho no seu WhatsApp e no seu e-mail — vamos te avisar no momento da liberação.
+        Fique de olho no seu e-mail — vamos te avisar no momento da liberação.
       </p>
       <div class="skeleton">
         <div class="sk-card" v-for="n in 3" :key="n">

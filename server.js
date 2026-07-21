@@ -20,6 +20,7 @@ import express from 'express'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
 import { existsSync } from 'node:fs'
+import { execSync } from 'node:child_process'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const DIST = join(__dirname, 'dist')
@@ -33,11 +34,17 @@ const app = express()
 app.set('trust proxy', true)
 
 // Garante que o build exista antes de subir.
+// Garante o build. Em plataformas que rodam o build separadamente (Hostinger
+// Node app), o dist/ já existe. Se não existir (ex.: start "cru"), buildamos
+// aqui em vez de derrubar o processo — evita 503 por dist ausente no boot.
 if (!existsSync(join(DIST, 'index.html'))) {
-  console.error(
-    '[workbook] dist/index.html não encontrado. Rode "npm run build" antes de "npm start".'
-  )
-  process.exit(1)
+  console.warn('[workbook] dist/ ausente — rodando "vite build" no boot...')
+  try {
+    execSync('npm run build', { cwd: __dirname, stdio: 'inherit' })
+  } catch (e) {
+    console.error('[workbook] falha ao buildar no boot:', e.message)
+    process.exit(1)
+  }
 }
 
 // Healthcheck simples para a plataforma de deploy.

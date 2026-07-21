@@ -16,7 +16,7 @@ export const SURVEY = [
     // "Outra" → qual? (se muita gente de outra área entra, é público errado)
     revela: {
       'Outra': { id: 'area_outra', label: 'Qual é a sua área de atuação?',
-        placeholder: 'Ex.: administração, corretagem, engenharia...' },
+        placeholder: 'Ex.: administração, corretagem, engenharia...', obrigatoria: true },
     } },
 
   { id: 'atua_holding', tipo: 'radio', chart: true, obrigatoria: true,
@@ -30,7 +30,7 @@ export const SURVEY = [
     revela: {
       'Já atuo e sigo um método bem definido': { id: 'metodo_qual',
         label: 'Qual método ou curso você segue hoje?',
-        placeholder: 'Nome do método, mentor ou curso que você usa' },
+        placeholder: 'Nome do método, mentor ou curso que você usa', obrigatoria: true },
     } },
 
   { id: 'faturamento', tipo: 'radio', chart: true, obrigatoria: true,

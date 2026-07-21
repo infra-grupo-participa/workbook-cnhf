@@ -52,7 +52,15 @@ const etapasTotais = modoPublico ? TOTAL + 2 : TOTAL
 const preenchidoAtual = computed(() => {
   if (naPergunta.value) {
     const v = respostas.value[atual.value.id]
-    return v != null && String(v).trim().length > 0
+    if (v == null || String(v).trim().length === 0) return false
+    // se a opção escolhida revela um sub-campo OBRIGATÓRIO, ele também precisa
+    // estar preenchido para liberar o avanço (ex.: "Outra → qual?").
+    const cond = condicionalAtual.value
+    if (cond && cond.obrigatoria) {
+      const sc = respostas.value[cond.id]
+      if (sc == null || String(sc).trim().length === 0) return false
+    }
+    return true
   }
   if (noNome.value) return !checarNome()
   if (noEmail.value) return !checarEmail()
@@ -112,7 +120,13 @@ function escolher(op) {
 function avancar() {
   erro.value = ''
   if (naPergunta.value) {
-    if (!preenchidoAtual.value) { erro.value = 'Responda para continuar.'; return }
+    if (!preenchidoAtual.value) {
+      const cond = condicionalAtual.value
+      const faltaCond = cond && cond.obrigatoria &&
+        !(respostas.value[cond.id] && String(respostas.value[cond.id]).trim())
+      erro.value = faltaCond ? 'Preencha o campo acima para continuar.' : 'Responda para continuar.'
+      return
+    }
     if (ehUltimo.value) return finalizar()   // modo logado: última pergunta finaliza
     passo.value++
     return
@@ -138,8 +152,14 @@ function voltar() {
 
 async function finalizar() {
   erro.value = ''
-  // garante que nenhuma pergunta obrigatória ficou vazia
-  const faltando = SURVEY.find((q) => q.obrigatoria && !(respostas.value[q.id] && String(respostas.value[q.id]).trim()))
+  // garante que nenhuma pergunta obrigatória (nem sub-campo condicional
+  // obrigatório revelado pela resposta) ficou vazia — defesa final.
+  const vazio = (id) => !(respostas.value[id] && String(respostas.value[id]).trim())
+  const faltando = SURVEY.find((q) => {
+    if (q.obrigatoria && vazio(q.id)) return true
+    const cond = q.revela && q.revela[respostas.value[q.id]]
+    return cond && cond.obrigatoria && vazio(cond.id)
+  })
   if (faltando) { erro.value = 'Ainda falta responder alguma pergunta.'; passo.value = SURVEY.indexOf(faltando); return }
 
   enviando.value = true
@@ -268,7 +288,7 @@ const eyebrow = computed(() => {
           <!-- sub-campo condicional (desdobramento): ex. "Outra → qual?" -->
           <Transition name="fade">
             <label v-if="condicionalAtual" class="field condicional" :key="condicionalAtual.id">
-              <span>{{ condicionalAtual.label }}</span>
+              <span>{{ condicionalAtual.label }}<em v-if="condicionalAtual.obrigatoria" class="obrig">*</em></span>
               <input
                 type="text" v-model="respostas[condicionalAtual.id]"
                 :placeholder="condicionalAtual.placeholder"
@@ -356,6 +376,7 @@ const eyebrow = computed(() => {
 .field.grande input { font-size: 17px; padding: 15px 16px; }
 .erro-campo { color: var(--bad); font-size: 12.5px; font-weight: 600; margin-top: 6px; display: block; }
 .condicional { margin-top: 18px; padding-top: 18px; border-top: 1px solid var(--stroke); }
+.obrig { color: var(--accent); font-style: normal; font-weight: 700; margin-left: 2px; }
 textarea { min-height: 140px; font-size: 15.5px; margin-top: 4px; }
 
 .nav { display: flex; justify-content: space-between; gap: 12px; margin-top: 28px; }

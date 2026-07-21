@@ -20,7 +20,10 @@ const routes = [
   { path: '/criar-acesso', name: 'criar-acesso', component: CriarAcesso },
   { path: '/esqueci-senha', name: 'esqueci', component: EsqueciSenha },
   { path: '/redefinir-senha', name: 'redefinir', component: RedefinirSenha },
-  { path: '/pesquisa', name: 'pesquisa', component: Pesquisa, meta: { requiresAuth: true } },
+  // pesquisa é PÚBLICA: é a porta de entrada do funil (link compartilhável).
+  // Lead novo responde aqui e ganha o acesso ao final. Aluno logado sem
+  // pesquisa também cai aqui pelo gate (requiresSurvey).
+  { path: '/pesquisa', name: 'pesquisa', component: Pesquisa },
   { path: '/minhas-anotacoes', name: 'anotacoes', component: Anotacoes, meta: { requiresAuth: true } },
   { path: '/resultado-das-pesquisas', name: 'resultados', component: Resultados, meta: { requiresAuth: true, admin: true } },
   { path: '/:pathMatch(.*)*', redirect: '/login' },

@@ -96,18 +96,23 @@ export async function login(email, password) {
 }
 
 /**
- * Auto-cadastro por convite (link público /criar-acesso).
- * Cria o usuário no Auth com metadata sistema='workbook' (o trigger
- * cria perfil + lead). Retorna { ok, code, needsConfirm }.
+ * Auto-cadastro por convite. Cria o usuário no Auth com metadata
+ * sistema='workbook' (o trigger cria perfil + lead com nome/profissao/telefone).
+ * Retorna { ok, code, needsConfirm }.
  * códigos: EXISTS (e-mail já tem acesso) | ERROR
  */
-export async function signUpConvite({ email, nome, senha, profissao }) {
+export async function signUpConvite({ email, nome, senha, profissao, telefone }) {
   const e = norm(email)
   const { data, error } = await supabase.auth.signUp({
     email: e,
     password: senha,
     options: {
-      data: { sistema: 'workbook', nome: nome || '', profissao: profissao || null },
+      data: {
+        sistema: 'workbook',
+        nome: nome || '',
+        profissao: profissao || null,
+        telefone: telefone || null,
+      },
       emailRedirectTo: `${location.origin}${location.pathname}`,
     },
   })
@@ -119,6 +124,68 @@ export async function signUpConvite({ email, nome, senha, profissao }) {
   const needsConfirm = !data.session
   if (data.session) { setSession(data.session); await loadPerfil() }
   return { ok: true, needsConfirm }
+}
+
+/**
+ * gerarSenha — senha aleatória legível (sem caracteres ambíguos), exibida
+ * uma única vez no modal pós-pesquisa. O aluno copia e usa para entrar.
+ */
+export function gerarSenha(len = 10) {
+  const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnpqrstuvwxyz23456789'
+  let s = ''
+  const buf = new Uint32Array(len)
+  crypto.getRandomValues(buf)
+  for (let i = 0; i < len; i++) s += chars[buf[i] % chars.length]
+  return s
+}
+
+/**
+ * signUpComPesquisa — FLUXO NOVO (porta de entrada do funil):
+ * o lead responde a pesquisa SEM login; ao finalizar, criamos o acesso
+ * com uma senha aleatória, gravamos as respostas e devolvemos a senha
+ * para ser exibida no modal.
+ *
+ * Como a confirmação de e-mail está DESLIGADA no projeto, o signUp já
+ * retorna sessão → gravamos a pesquisa autenticado (respeita a RLS).
+ *
+ * Retorna { ok, senha, email } em sucesso.
+ * códigos de erro: EXISTS (e-mail já respondeu / já tem acesso) | ERROR
+ */
+export async function signUpComPesquisa({ email, nome, telefone, answers }) {
+  const e = norm(email)
+  const senha = gerarSenha()
+
+  const { data, error } = await supabase.auth.signUp({
+    email: e,
+    password: senha,
+    options: {
+      data: {
+        sistema: 'workbook',
+        nome: nome || '',
+        telefone: telefone || null,
+      },
+      emailRedirectTo: `${location.origin}${location.pathname}`,
+    },
+  })
+  if (error) {
+    const code = /already|exist|registered/i.test(error.message) ? 'EXISTS' : 'ERROR'
+    return { ok: false, code, message: error.message }
+  }
+  if (!data.session) {
+    // projeto sem confirmação de e-mail deveria dar sessão direto;
+    // se cair aqui, não conseguimos gravar a pesquisa autenticado.
+    return { ok: false, code: 'NO_SESSION' }
+  }
+  setSession(data.session)
+  await loadPerfil()
+
+  // grava as respostas já autenticado (passa nome explícito: o perfil
+  // recém-criado pode ainda não ter propagado no cache). O ACESSO já está
+  // criado neste ponto — se o insert da pesquisa falhar (rede etc.), NÃO
+  // travamos o lead com EXISTS numa retentativa: retornamos ok assim mesmo
+  // (o acesso é o entregável) e sinalizamos surveyPending para uma retentativa.
+  const reg = await submitSurvey(e, answers, nome)
+  return { ok: true, senha, email: e, surveyPending: !reg.ok }
 }
 
 /**
@@ -172,13 +239,13 @@ export async function hasSurvey(_email) {
   return (count ?? 0) > 0
 }
 
-export async function submitSurvey(_email, answers) {
+export async function submitSurvey(_email, answers, nome) {
   const uid = currentUserId()
   if (!uid) return { ok: false, code: 'NO_SESSION' }
   const registro = {
     user_id: uid,
     email: currentUser(),
-    nome: _perfil?.nome ?? '',
+    nome: nome ?? _perfil?.nome ?? '',
     answers,
     atualizado_em: new Date().toISOString(),
   }

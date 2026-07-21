@@ -1,41 +1,38 @@
 /* ============================================================
-   PESQUISA DE QUALIFICAÇÃO — perguntas (fonte: Concepção de Lançamento)
-   Concepção pede pesquisa curta, só o que a gente vai usar:
-   idade, gênero, pior problema da carreira, o que gostaria que mudasse,
-   + qualificação de MQL (profissão, tempo, experiência, faturamento).
+   PESQUISA DE QUALIFICAÇÃO — CNHF (perguntas definitivas)
+   Fonte: briefing do Marcio (2026-07-21). Pesquisa curta, é a
+   PORTA DE ENTRADA do funil: o lead responde e ganha o acesso
+   ao workbook (senha exibida no modal após finalizar).
    `chart: true` = entra nos gráficos de pizza do dashboard de resultados.
    ============================================================ */
 export const SURVEY = [
-  { id: 'profissao', tipo: 'radio', chart: true, obrigatoria: true,
-    label: 'Qual a sua profissão?',
-    opcoes: ['Advogado(a)', 'Contador(a)', 'Outra'] },
+  { id: 'area', tipo: 'radio', chart: true, obrigatoria: true,
+    label: 'Qual a sua área de atuação?',
+    opcoes: ['Advocacia', 'Contabilidade', 'Outra'] },
 
-  { id: 'idade', tipo: 'radio', chart: true, obrigatoria: true,
-    label: 'Qual a sua faixa de idade?',
-    opcoes: ['Até 29 anos', '30 a 39', '40 a 49', '50 ou mais'] },
-
-  { id: 'genero', tipo: 'radio', chart: true, obrigatoria: true,
-    label: 'Gênero',
-    opcoes: ['Masculino', 'Feminino', 'Prefiro não informar'] },
-
-  { id: 'tempo', tipo: 'radio', chart: true, obrigatoria: true,
-    label: 'Há quanto tempo você atua na sua profissão?',
-    opcoes: ['Menos de 2 anos', '2 a 5 anos', '5 a 10 anos', 'Mais de 10 anos'] },
-
-  { id: 'holding', tipo: 'radio', chart: true, obrigatoria: true,
-    label: 'Você já estruturou uma Holding Familiar para algum cliente?',
-    opcoes: ['Nunca', '1 a 2', '3 ou mais'] },
+  { id: 'atua_holding', tipo: 'radio', chart: true, obrigatoria: true,
+    label: 'Você atua com Holding Familiar hoje?',
+    opcoes: [
+      'Não atuo',
+      'Já atuo, mas não com um método claro',
+      'Já atuo e sigo um método bem definido',
+    ] },
 
   { id: 'faturamento', tipo: 'radio', chart: true, obrigatoria: true,
-    label: 'Qual a sua faixa de faturamento mensal hoje como profissional?',
+    label: 'Qual o seu faturamento mensal estimado?',
     opcoes: ['Até R$ 5 mil', 'R$ 5 a 15 mil', 'R$ 15 a 30 mil', 'Acima de R$ 30 mil'] },
 
-  { id: 'problema', tipo: 'textarea', chart: false, obrigatoria: true,
-    label: 'Qual o pior problema da sua carreira hoje?',
-    placeholder: 'Escreve com as suas palavras...' },
+  { id: 'objetivo', tipo: 'radio', chart: true, obrigatoria: true,
+    label: 'Qual o seu principal objetivo com o Curso Nacional?',
+    opcoes: [
+      'Criar uma nova fonte de receita',
+      'Me aprofundar tecnicamente',
+      'Atender um cliente que já tenho',
+      'Ainda estou explorando',
+    ] },
 
-  { id: 'mudanca', tipo: 'textarea', chart: false, obrigatoria: true,
-    label: 'O que você gostaria que mudasse na sua carreira nos próximos 12 meses?',
+  { id: 'dificuldade', tipo: 'textarea', chart: false, obrigatoria: true,
+    label: 'Qual a sua maior dificuldade ou dúvida com Holding Familiar hoje?',
     placeholder: 'Escreve com as suas palavras...' },
 ]
 

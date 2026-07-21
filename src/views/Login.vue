@@ -59,7 +59,7 @@ async function entrar() {
       <div class="rodape">
         <router-link class="link" :to="{ name: 'esqueci' }">Esqueci minha senha</router-link>
         <span class="sep">·</span>
-        <router-link class="link" :to="{ name: 'criar-acesso' }">Criar meu acesso</router-link>
+        <router-link class="link" :to="{ name: 'pesquisa' }">Ainda não tenho acesso</router-link>
       </div>
     </div>
   </div>

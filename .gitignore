@@ -6,3 +6,5 @@ node_modules/
 # nunca commitar credenciais de FTP/Supabase
 .env
 .env.local
+# Edge Functions locais contêm chaves de API (ex.: SendFlow) — NÃO versionar
+supabase/

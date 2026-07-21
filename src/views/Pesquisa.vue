@@ -11,50 +11,59 @@ const route = useRoute()
 const router = useRouter()
 
 // Dois modos:
-//  - PÚBLICO: lead novo abriu o link /#/pesquisa sem login → coleta contato,
-//    cria o acesso ao final e mostra a senha no modal.
-//  - LOGADO: aluno que já tem acesso mas ainda não respondeu (gate antigo).
+//  - PÚBLICO: lead novo abriu o link /#/pesquisa sem login → responde as
+//    perguntas, informa nome e e-mail POR ÚLTIMO, e ganha o acesso (tela final).
+//  - LOGADO: aluno que já tem acesso mas ainda não respondeu (gate antigo) —
+//    não pede nome/e-mail (já os tem).
 const emailLogado = currentUser()
 const modoPublico = !emailLogado
 const travado = route.query.motivo === 'trava'
 
-// dados de contato (só no modo público) — etapa 0. Pedimos SÓ nome e e-mail
-// (o e-mail é a chave de cruzamento). WhatsApp não é coletado.
+// dados de contato — pedidos SÓ no fim, no modo público. O e-mail é a chave
+// de cruzamento; WhatsApp não é coletado.
 const contato = ref({ nome: '', email: '' })
-
 const respostas = ref({})
-// passo -1 = etapa de contato (só público); 0..n-1 = perguntas
-const passo = ref(modoPublico ? -1 : 0)
+
+// FLUXO EM PASSOS (uma pergunta por tela):
+//   0 .. TOTAL-1  → perguntas de qualificação
+//   [público] TOTAL   → tela do NOME
+//   [público] TOTAL+1 → tela do E-MAIL
+const TOTAL = SURVEY.length
+const PASSO_NOME = TOTAL
+const PASSO_EMAIL = TOTAL + 1
+const ultimoPasso = modoPublico ? PASSO_EMAIL : TOTAL - 1
+
+const passo = ref(0)
 const enviando = ref(false)
 const erro = ref('')
 
-// modal de acesso liberado (público)
-const acesso = ref(null) // { email, senha }
+// tela final "Obrigado" + credenciais (substitui o modal)
+const acesso = ref(null) // { email, senha, surveyPending }
 const copiado = ref(false)
 
-const total = SURVEY.length
-const naContato = computed(() => passo.value === -1)
-const atual = computed(() => SURVEY[passo.value] || null)
-const ultima = computed(() => passo.value === total - 1)
+const atual = computed(() => SURVEY[passo.value] || null)     // pergunta atual (ou null nas telas de contato)
+const naPergunta = computed(() => passo.value <= TOTAL - 1)
+const noNome = computed(() => passo.value === PASSO_NOME)
+const noEmail = computed(() => passo.value === PASSO_EMAIL)
+const ehUltimo = computed(() => passo.value === ultimoPasso)
 
-// para a barra de progresso: no público a etapa de contato conta como +1
-const etapasTotais = modoPublico ? total + 1 : total
-const etapaAtual = computed(() => (modoPublico ? passo.value + 1 : passo.value))
-
-const respondida = computed(() => {
-  if (naContato.value) return false
-  const v = respostas.value[atual.value.id]
-  return v != null && String(v).trim().length > 0
+// progresso: total de telas = perguntas (+ nome + e-mail no público)
+const etapasTotais = modoPublico ? TOTAL + 2 : TOTAL
+const preenchidoAtual = computed(() => {
+  if (naPergunta.value) {
+    const v = respostas.value[atual.value.id]
+    return v != null && String(v).trim().length > 0
+  }
+  if (noNome.value) return !checarNome()
+  if (noEmail.value) return !checarEmail()
+  return false
 })
 
-// erros por campo (para marcar o input em vermelho)
+// erros por campo
 const erros = ref({ nome: '', email: '' })
-
 const emailValido = (e) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(e || '').trim())
 
 // --- formatadores (evitam dado quebrado entrando na planilha) ---
-
-// nome: colapsa espaços e capitaliza cada palavra (exceto conectivos)
 function normalizarNome(v) {
   const minus = new Set(['de', 'da', 'do', 'das', 'dos', 'e'])
   return String(v || '').trim().replace(/\s+/g, ' ').toLowerCase()
@@ -62,10 +71,9 @@ function normalizarNome(v) {
     .map((w) => (minus.has(w) ? w : w.charAt(0).toUpperCase() + w.slice(1)))
     .join(' ')
 }
-function blurNome() { contato.value.nome = normalizarNome(contato.value.nome); validarCampo('nome') }
-function blurEmail() { contato.value.email = String(contato.value.email || '').trim().toLowerCase(); validarCampo('email') }
+function blurNome() { contato.value.nome = normalizarNome(contato.value.nome); erros.value.nome = checarNome() }
+function blurEmail() { contato.value.email = String(contato.value.email || '').trim().toLowerCase(); erros.value.email = checarEmail() }
 
-// validação por campo — retorna mensagem de erro (ou '')
 function checarNome() {
   const n = normalizarNome(contato.value.nome)
   if (!n) return 'Informe o seu nome completo.'
@@ -79,66 +87,58 @@ function checarEmail() {
   if (!emailValido(e)) return 'Informe um e-mail válido (ex.: nome@email.com).'
   return ''
 }
-function validarCampo(campo) {
-  if (campo === 'nome') erros.value.nome = checarNome()
-  if (campo === 'email') erros.value.email = checarEmail()
-}
-
-function contatoValido() {
-  erros.value.nome = checarNome()
-  erros.value.email = checarEmail()
-  const primeiro = erros.value.nome || erros.value.email
-  if (primeiro) { erro.value = primeiro; return false }
-  // normaliza os valores finais antes de seguir
-  contato.value.nome = normalizarNome(contato.value.nome)
-  contato.value.email = contato.value.email.trim().toLowerCase()
-  return true
-}
-
-function avancar() {
-  erro.value = ''
-  if (naContato.value) {
-    if (!contatoValido()) return
-    passo.value = 0
-    return
-  }
-  if (!respondida.value) { erro.value = 'Responda para continuar.'; return }
-  if (ultima.value) return finalizar()
-  passo.value++
-}
-function voltar() {
-  erro.value = ''
-  if (passo.value > (modoPublico ? -1 : 0)) passo.value--
-}
 
 // sub-campo condicional revelado pela opção escolhida na pergunta atual
 const condicionalAtual = computed(() => {
   const q = atual.value
   if (!q || !q.revela) return null
-  const escolhida = respostas.value[q.id]
-  return q.revela[escolhida] || null
+  return q.revela[respostas.value[q.id]] || null
 })
 
-// radio: seleciona. Se a opção revelar um sub-campo condicional, NÃO auto-avança
-// (deixa o lead preencher o "qual?"); senão, avança como antes.
+// radio: seleciona. Se a opção revela um sub-campo, NÃO auto-avança; senão avança.
 function escolher(op) {
   const q = atual.value
   respostas.value[q.id] = op
   erro.value = ''
-  // limpa sub-campos condicionais que não pertencem à opção agora escolhida
-  // (evita valor órfão de "qual?" quando o lead troca de resposta)
   if (q.revela) {
     for (const [gatilho, campo] of Object.entries(q.revela)) {
       if (gatilho !== op) delete respostas.value[campo.id]
     }
   }
-  const revela = q.revela && q.revela[op]
-  if (revela) return                       // mostra o sub-campo; avança no botão
-  setTimeout(() => { if (!ultima.value) passo.value++; }, 220)
+  if (q.revela && q.revela[op]) return       // mostra o sub-campo; avança no botão
+  setTimeout(() => { if (passo.value < ultimoPasso) passo.value++ }, 220)
+}
+
+function avancar() {
+  erro.value = ''
+  if (naPergunta.value) {
+    if (!preenchidoAtual.value) { erro.value = 'Responda para continuar.'; return }
+    if (ehUltimo.value) return finalizar()   // modo logado: última pergunta finaliza
+    passo.value++
+    return
+  }
+  if (noNome.value) {
+    erros.value.nome = checarNome()
+    if (erros.value.nome) { erro.value = erros.value.nome; return }
+    contato.value.nome = normalizarNome(contato.value.nome)
+    passo.value++
+    return
+  }
+  if (noEmail.value) {
+    erros.value.email = checarEmail()
+    if (erros.value.email) { erro.value = erros.value.email; return }
+    contato.value.email = contato.value.email.trim().toLowerCase()
+    return finalizar()
+  }
+}
+function voltar() {
+  erro.value = ''
+  if (passo.value > 0) passo.value--
 }
 
 async function finalizar() {
   erro.value = ''
+  // garante que nenhuma pergunta obrigatória ficou vazia
   const faltando = SURVEY.find((q) => q.obrigatoria && !(respostas.value[q.id] && String(respostas.value[q.id]).trim()))
   if (faltando) { erro.value = 'Ainda falta responder alguma pergunta.'; passo.value = SURVEY.indexOf(faltando); return }
 
@@ -151,14 +151,12 @@ async function finalizar() {
     })
     enviando.value = false
     if (!r.ok) {
-      if (r.code === 'EXISTS') {
-        erro.value = 'Já existe um acesso com esse e-mail. Se já respondeu antes, faça o login.'
-      } else {
-        erro.value = 'Não foi possível liberar o seu acesso agora. Tente novamente em instantes.'
-      }
+      erro.value = r.code === 'EXISTS'
+        ? 'Já existe um acesso com esse e-mail. Se já respondeu antes, faça o login.'
+        : 'Não foi possível liberar o seu acesso agora. Tente novamente em instantes.'
       return
     }
-    // sucesso → mostra o modal com os dados de acesso
+    // sucesso → tela "Obrigado" com as credenciais
     acesso.value = { email: r.email, senha: r.senha, surveyPending: r.surveyPending }
   } else {
     await submitSurvey(emailLogado, { ...respostas.value })
@@ -176,15 +174,18 @@ async function copiarSenha() {
 }
 
 async function entrarNoAmbiente() {
-  // se a gravação da pesquisa ficou pendente (falha transitória após o
-  // acesso já criado), tenta de novo agora — o usuário está autenticado.
   if (acesso.value?.surveyPending) {
     const reg = await submitSurvey(acesso.value.email, { ...respostas.value }, contato.value.nome)
     if (reg.ok) acesso.value.surveyPending = false
   }
-  // já está logado (o signUp criou a sessão) → vai direto pro ambiente
   router.push({ name: 'ambiente' })
 }
+
+// rótulo do topo (contexto de cada tela)
+const eyebrow = computed(() => {
+  if (noNome.value || noEmail.value) return 'Quase lá · seus dados de acesso'
+  return `Pesquisa de qualificação · pergunta ${passo.value + 1} de ${TOTAL}`
+})
 </script>
 
 <template>
@@ -194,51 +195,66 @@ async function entrarNoAmbiente() {
       <span v-if="emailLogado" class="quem muted">{{ emailLogado }}</span>
     </header>
 
-    <div class="card box">
-      <div class="eyebrow" v-if="naContato">Pesquisa de qualificação · CNHF</div>
-      <div class="eyebrow" v-else>Pesquisa de qualificação · pergunta {{ passo + 1 }} de {{ total }}</div>
+    <!-- ===== TELA FINAL: OBRIGADO + CREDENCIAIS ===== -->
+    <div v-if="acesso" class="card box obrigado">
+      <div class="check"><Check :size="34" :stroke-width="3" /></div>
+      <div class="eyebrow" style="text-align:center">Pesquisa concluída</div>
+      <h1>Obrigado pelo preenchimento!</h1>
+      <p class="lead muted">
+        Suas respostas foram registradas com sucesso. O seu acesso ao workbook do
+        <strong>Curso Nacional de Formação em Holding Familiar</strong> já está liberado.
+      </p>
 
-      <div class="progresso">
-        <div class="barra"><div class="fill" :style="{ width: ((etapaAtual + (respondida ? 1 : 0)) / etapasTotais * 100) + '%' }" /></div>
+      <div class="acesso-bloco">
+        <div class="acesso-titulo">Seus dados de acesso</div>
+        <p class="acesso-instrucao muted">
+          Guarde estas informações. Use-as para entrar no ambiente do aluno em
+          <strong>workbook.cursoholding.com.br</strong> sempre que quiser.
+        </p>
+
+        <div class="creds">
+          <div class="cred">
+            <span class="rot">Seu e-mail (login)</span>
+            <span class="val mono">{{ acesso.email }}</span>
+          </div>
+          <div class="cred">
+            <span class="rot">Sua senha provisória</span>
+            <div class="senha-row">
+              <span class="val mono senha">{{ acesso.senha }}</span>
+              <button class="btn ghost sm" @click="copiarSenha">
+                <component :is="copiado ? Check : Copy" :size="15" :stroke-width="2.5" />
+                {{ copiado ? 'Copiada' : 'Copiar' }}
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <p class="dica"><strong>Dica:</strong> anote a senha antes de continuar. Depois de entrar,
+          você pode trocá-la por uma da sua preferência em <em>“Trocar senha”</em>.</p>
       </div>
 
-      <div v-if="modoPublico && naContato" class="alert warn">
-        Responda esta pesquisa rápida para liberar o seu acesso ao workbook do
-        Curso Nacional de Formação em Holding Familiar. Ao final, você recebe os
-        seus dados de acesso.
+      <button class="btn primary block grande" @click="entrarNoAmbiente">Entrar no meu ambiente</button>
+    </div>
+
+    <!-- ===== PESQUISA (passo a passo) ===== -->
+    <div v-else class="card box">
+      <div class="eyebrow">{{ eyebrow }}</div>
+
+      <div class="progresso">
+        <div class="barra"><div class="fill" :style="{ width: ((passo + (preenchidoAtual ? 1 : 0)) / etapasTotais * 100) + '%' }" /></div>
+      </div>
+
+      <div v-if="modoPublico && passo === 0" class="alert warn">
+        Responda esta pesquisa rápida para liberar o seu acesso ao workbook. Ao final,
+        você recebe os seus dados de acesso.
       </div>
       <div v-else-if="travado && passo === 0" class="alert warn">
         O seu acesso ao ambiente do aluno é liberado assim que você responde esta pesquisa rápida. É só uma vez.
       </div>
 
-      <!-- ETAPA DE CONTATO (só modo público) -->
       <Transition name="fade" mode="out-in">
-        <div v-if="naContato" key="contato" class="q">
-          <div class="q-label">Antes de começar, seus dados de contato</div>
-          <div class="form">
-            <label class="field">
-              <span>Nome completo</span>
-              <input
-                type="text" v-model="contato.nome" placeholder="Seu nome completo"
-                autocomplete="name" :class="{ invalido: erros.nome }"
-                @input="erros.nome = ''" @blur="blurNome" @keydown.enter="avancar"
-              />
-              <small v-if="erros.nome" class="erro-campo">{{ erros.nome }}</small>
-            </label>
-            <label class="field">
-              <span>E-mail</span>
-              <input
-                type="email" v-model="contato.email" placeholder="voce@email.com"
-                autocomplete="email" inputmode="email" :class="{ invalido: erros.email }"
-                @input="erros.email = ''" @blur="blurEmail" @keydown.enter="avancar"
-              />
-              <small v-if="erros.email" class="erro-campo">{{ erros.email }}</small>
-            </label>
-          </div>
-        </div>
-
-        <!-- PERGUNTA ÚNICA DA ETAPA -->
-        <div v-else :key="atual.id" class="q">
+        <!-- PERGUNTA DE QUALIFICAÇÃO -->
+        <div v-if="naPergunta" :key="'q-' + atual.id" class="q">
           <div class="q-label">{{ atual.label }}</div>
 
           <div v-if="atual.tipo === 'radio'" class="opcoes">
@@ -256,108 +272,129 @@ async function entrarNoAmbiente() {
               <input
                 type="text" v-model="respostas[condicionalAtual.id]"
                 :placeholder="condicionalAtual.placeholder"
-                @keydown.enter="avancar" autofocus
+                @keydown.enter="avancar"
               />
             </label>
           </Transition>
 
           <textarea
             v-if="atual.tipo === 'textarea'" v-model="respostas[atual.id]" :placeholder="atual.placeholder"
-            @keydown.ctrl.enter="avancar" @keydown.meta.enter="avancar" autofocus
+            @keydown.ctrl.enter="avancar" @keydown.meta.enter="avancar"
           />
+        </div>
+
+        <!-- TELA DO NOME -->
+        <div v-else-if="noNome" key="nome" class="q">
+          <div class="q-label">Como é o seu nome completo?</div>
+          <p class="q-ajuda muted">É assim que vamos te chamar no ambiente do aluno.</p>
+          <label class="field grande">
+            <input
+              type="text" v-model="contato.nome" placeholder="Seu nome completo"
+              autocomplete="name" :class="{ invalido: erros.nome }"
+              @input="erros.nome = ''" @blur="blurNome" @keydown.enter="avancar"
+            />
+            <small v-if="erros.nome" class="erro-campo">{{ erros.nome }}</small>
+          </label>
+        </div>
+
+        <!-- TELA DO E-MAIL -->
+        <div v-else key="email" class="q">
+          <div class="q-label">Qual o seu melhor e-mail?</div>
+          <p class="q-ajuda muted">Será o seu login de acesso — use o mesmo e-mail da sua inscrição.</p>
+          <label class="field grande">
+            <input
+              type="email" v-model="contato.email" placeholder="voce@email.com"
+              autocomplete="email" inputmode="email" :class="{ invalido: erros.email }"
+              @input="erros.email = ''" @blur="blurEmail" @keydown.enter="avancar"
+            />
+            <small v-if="erros.email" class="erro-campo">{{ erros.email }}</small>
+          </label>
         </div>
       </Transition>
 
       <div v-if="erro" class="alert bad" style="margin-top:14px">{{ erro }}</div>
 
       <div class="nav">
-        <button class="btn ghost" :disabled="passo === (modoPublico ? -1 : 0)" @click="voltar">Voltar</button>
+        <button class="btn ghost" :disabled="passo === 0" @click="voltar">Voltar</button>
         <button class="btn primary" :disabled="enviando" @click="avancar">
-          {{ enviando ? 'Liberando...' : (naContato ? 'Começar' : (ultima ? 'Finalizar e liberar meu acesso' : 'Continuar')) }}
+          {{ enviando ? 'Liberando acesso...' : (ehUltimo ? 'Finalizar e liberar meu acesso' : 'Continuar') }}
         </button>
       </div>
     </div>
-
-    <!-- MODAL: acesso liberado (só modo público) -->
-    <Teleport to="body">
-      <div v-if="acesso" class="overlay">
-        <div class="pop card">
-          <div class="check"><Check :size="30" :stroke-width="3" /></div>
-          <div class="eyebrow" style="text-align:center">Acesso liberado</div>
-          <h3>Pronto! Seu acesso ao workbook está garantido</h3>
-          <p class="muted"><strong>Anote a sua senha antes de continuar.</strong> Você vai usar estes dados para entrar no ambiente do aluno sempre que quiser.</p>
-
-          <div class="creds">
-            <div class="cred">
-              <span class="rot">E-mail</span>
-              <span class="val mono">{{ acesso.email }}</span>
-            </div>
-            <div class="cred">
-              <span class="rot">Senha</span>
-              <div class="senha-row">
-                <span class="val mono">{{ acesso.senha }}</span>
-                <button class="btn ghost sm" @click="copiarSenha">
-                  <component :is="copiado ? Check : Copy" :size="15" :stroke-width="2.5" />
-                  {{ copiado ? 'Copiada' : 'Copiar' }}
-                </button>
-              </div>
-            </div>
-          </div>
-
-          <p class="dica muted">Dica: depois de entrar, você pode trocar a senha por uma da sua preferência em “Trocar senha”.</p>
-
-          <button class="btn primary block" @click="entrarNoAmbiente">Entrar no meu ambiente</button>
-        </div>
-      </div>
-    </Teleport>
   </div>
 </template>
 
 <style scoped>
-.wrap { position: relative; z-index: 1; max-width: 620px; margin: 0 auto; padding: 24px 18px 60px; }
+.wrap { position: relative; z-index: 1; max-width: 600px; margin: 0 auto; padding: 28px 18px 60px; }
 /* logo sempre centralizado; e-mail do logado fica absoluto p/ não deslocar o logo */
-.top { position: relative; display: flex; align-items: center; justify-content: center; color: var(--ink); margin-bottom: 20px; }
+.top { position: relative; display: flex; align-items: center; justify-content: center; color: var(--ink); margin-bottom: 22px; }
 .top .quem { position: absolute; right: 0; top: 50%; transform: translateY(-50%); font-size: 12.5px; max-width: 40%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 @media (max-width: 520px) { .top .quem { display: none; } }
-.box { padding: 30px 32px; min-height: 380px; display: flex; flex-direction: column; }
-.progresso { margin: 12px 0 20px; }
+
+.box { padding: 32px 34px; min-height: 400px; display: flex; flex-direction: column; }
+@media (max-width: 480px) { .box { padding: 24px 20px; } }
+
+.progresso { margin: 14px 0 22px; }
 .barra { height: 8px; border-radius: 999px; background: var(--stroke); overflow: hidden; }
-.fill { height: 100%; background: var(--accent); border-radius: 999px; transition: width .3s ease; }
+.fill { height: 100%; background: var(--accent); border-radius: 999px; transition: width .35s cubic-bezier(.4,0,.2,1); }
+
 .q { flex: 1; }
-.q-label { font-size: 21px; font-weight: 700; line-height: 1.35; margin-bottom: 20px; }
-.form { display: flex; flex-direction: column; gap: 14px; }
-.erro-campo { color: var(--bad); font-size: 12px; font-weight: 600; margin-top: 2px; }
-.opcoes { display: flex; flex-direction: column; gap: 10px; }
-.condicional { margin-top: 16px; padding-top: 16px; border-top: 1px solid var(--stroke); }
+.q-label { font-size: 22px; font-weight: 700; line-height: 1.35; margin-bottom: 8px; letter-spacing: -0.01em; }
+.q-ajuda { font-size: 14px; margin: 0 0 22px; line-height: 1.5; }
+
+.opcoes { display: flex; flex-direction: column; gap: 11px; margin-top: 12px; }
 .op {
-  text-align: left; font: inherit; font-size: 15px; color: var(--ink);
-  padding: 15px 18px; border: 1px solid var(--stroke-strong); border-radius: var(--radius-sm);
-  background: var(--surface); cursor: pointer; transition: border-color .12s, background .12s, transform .08s;
+  text-align: left; font: inherit; font-size: 15.5px; color: var(--ink);
+  padding: 16px 18px; border: 1px solid var(--stroke-strong); border-radius: var(--radius-sm);
+  background: var(--surface); cursor: pointer;
+  transition: border-color .14s, background .14s, transform .08s, box-shadow .14s;
 }
-.op:hover { border-color: var(--accent-line); }
+.op:hover { border-color: var(--accent-line); box-shadow: 0 2px 12px rgba(255,107,0,.07); }
 .op:active { transform: scale(.99); }
-.op.sel { border-color: var(--accent); background: var(--accent-soft); font-weight: 600; }
-textarea { min-height: 130px; font-size: 15px; }
-.nav { display: flex; justify-content: space-between; gap: 12px; margin-top: 24px; }
+.op.sel { border-color: var(--accent); background: var(--accent-soft); font-weight: 600; box-shadow: 0 0 0 3px var(--accent-soft); }
 
-.fade-enter-active, .fade-leave-active { transition: opacity .18s ease, transform .18s ease; }
-.fade-enter-from { opacity: 0; transform: translateX(12px); }
-.fade-leave-to { opacity: 0; transform: translateX(-12px); }
+.field.grande input { font-size: 17px; padding: 15px 16px; }
+.erro-campo { color: var(--bad); font-size: 12.5px; font-weight: 600; margin-top: 6px; display: block; }
+.condicional { margin-top: 18px; padding-top: 18px; border-top: 1px solid var(--stroke); }
+textarea { min-height: 140px; font-size: 15.5px; margin-top: 4px; }
 
-/* modal de acesso liberado */
-.overlay { position: fixed; inset: 0; z-index: 60; background: rgba(0,0,0,.55); backdrop-filter: blur(6px); display: grid; place-items: center; padding: 24px; }
-.pop { width: min(460px, 100%); padding: 30px 30px 26px; text-align: center; }
-.check { width: 54px; height: 54px; margin: 0 auto 12px; border-radius: 50%; background: var(--accent-soft); color: var(--accent); display: grid; place-items: center; font-size: 26px; font-weight: 900; border: 1px solid var(--accent-line); }
-.pop h3 { margin: 6px 0 10px; font-size: 20px; line-height: 1.3; }
-.pop p { font-size: 14px; line-height: 1.6; margin: 0; }
-.creds { margin: 20px 0 8px; display: flex; flex-direction: column; gap: 10px; text-align: left; }
-.cred { background: var(--surface); border: 1px solid var(--stroke-strong); border-radius: var(--radius-sm); padding: 12px 14px; }
-.rot { display: block; font-size: 10.5px; text-transform: uppercase; letter-spacing: .08em; color: var(--ink-3); font-weight: 700; margin-bottom: 4px; }
-.val { font-size: 15px; color: var(--ink); }
-.mono { font-family: ui-monospace, Menlo, monospace; }
+.nav { display: flex; justify-content: space-between; gap: 12px; margin-top: 28px; }
+.nav .btn { min-width: 108px; }
+
+.fade-enter-active, .fade-leave-active { transition: opacity .2s ease, transform .2s ease; }
+.fade-enter-from { opacity: 0; transform: translateX(14px); }
+.fade-leave-to { opacity: 0; transform: translateX(-14px); }
+
+/* ===== TELA "OBRIGADO" + CREDENCIAIS ===== */
+.obrigado { text-align: center; align-items: stretch; }
+.check {
+  width: 64px; height: 64px; margin: 4px auto 16px; border-radius: 50%;
+  background: var(--accent-soft); color: var(--accent); display: grid; place-items: center;
+  border: 1px solid var(--accent-line);
+}
+.obrigado h1 { font-size: 27px; margin: 8px 0 12px; letter-spacing: -0.02em; }
+.obrigado .lead { font-size: 15px; line-height: 1.6; max-width: 460px; margin: 0 auto 8px; }
+
+.acesso-bloco {
+  margin: 24px 0 8px; padding: 22px 22px 20px; text-align: left;
+  border: 1px solid var(--accent-line); border-radius: var(--radius);
+  background: var(--accent-soft);
+}
+.acesso-titulo { font-size: 15px; font-weight: 800; color: var(--ink); margin-bottom: 4px; }
+.acesso-instrucao { font-size: 13px; line-height: 1.5; margin: 0 0 16px; }
+
+.creds { display: flex; flex-direction: column; gap: 12px; }
+.cred { background: var(--surface); border: 1px solid var(--stroke-strong); border-radius: var(--radius-sm); padding: 13px 15px; }
+.rot { display: block; font-size: 10.5px; text-transform: uppercase; letter-spacing: .08em; color: var(--ink-3); font-weight: 800; margin-bottom: 5px; }
+.val { font-size: 15px; color: var(--ink); word-break: break-all; }
+.mono { font-family: ui-monospace, Menlo, Consolas, monospace; }
 .senha-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
-.senha-row .val { font-size: 17px; font-weight: 700; letter-spacing: .04em; }
-.btn.sm { font-size: 12px; padding: 6px 12px; }
-.dica { font-size: 12.5px; margin: 12px 0 18px; }
+.senha-row .senha { font-size: 19px; font-weight: 700; letter-spacing: .06em; }
+.btn.sm { font-size: 12.5px; padding: 7px 13px; flex: none; }
+
+.dica { font-size: 13px; line-height: 1.55; color: var(--ink-2); margin: 16px 0 0; }
+.dica em { font-style: normal; font-weight: 600; color: var(--ink); }
+
 .block { width: 100%; }
+.btn.grande { margin-top: 22px; font-size: 15.5px; padding: 14px 18px; }
 </style>

@@ -2,6 +2,7 @@
 import { ref, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import LogoCNHF from '../components/LogoCNHF.vue'
+import Lock from '@lucide/vue/dist/esm/icons/lock.mjs'
 import { currentUser, getLead, logout, changePassword } from '../data/api.js'
 
 const router = useRouter()
@@ -42,7 +43,7 @@ function sair() { logout(); router.push({ name: 'login' }) }
 
     <section class="hero card">
       <div class="eyebrow">Ambiente do aluno</div>
-      <h1>Olá{{ nome ? ', ' + nome.split(' ')[0] : '' }} 👋</h1>
+      <h1>Olá{{ nome ? ', ' + nome.split(' ')[0] : '' }}</h1>
       <p class="muted">Seu acesso ao workbook do Curso Nacional de Formação em Holding Familiar está garantido. Em breve o conteúdo das aulas aparece aqui.</p>
       <div class="tags">
         <span class="tag">100% ao vivo</span><span class="tag">Certificado ao final</span>
@@ -63,7 +64,7 @@ function sair() { logout(); router.push({ name: 'login' }) }
 
     <!-- CONTEÚDO EM BREVE — a trilha ainda está sendo preparada -->
     <section class="card soon">
-      <div class="lock">🔒</div>
+      <div class="lock"><Lock :size="26" :stroke-width="2" /></div>
       <div class="eyebrow">Em breve</div>
       <h2>Sua trilha está sendo preparada</h2>
       <p class="muted">
@@ -104,7 +105,7 @@ function sair() { logout(); router.push({ name: 'login' }) }
 
 /* bloqueio "em breve" */
 .soon { padding: 40px 32px 34px; text-align: center; }
-.lock { width: 58px; height: 58px; margin: 0 auto 14px; border-radius: 50%; background: var(--accent-soft); border: 1px solid var(--accent-line); display: grid; place-items: center; font-size: 26px; }
+.lock { width: 58px; height: 58px; margin: 0 auto 14px; border-radius: 50%; background: var(--accent-soft); border: 1px solid var(--accent-line); display: grid; place-items: center; color: var(--accent); }
 .soon h2 { font-size: 23px; margin: 8px 0 12px; }
 .soon p { font-size: 14.5px; line-height: 1.65; max-width: 560px; margin: 0 auto; }
 .soon .aviso { margin-top: 10px; font-size: 13.5px; }

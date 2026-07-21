@@ -2,6 +2,8 @@
 import { ref, computed, onMounted } from 'vue'
 import LogoCNHF from '../components/LogoCNHF.vue'
 import PieChart from '../components/PieChart.vue'
+import Download from '@lucide/vue/dist/esm/icons/download.mjs'
+import TriangleAlert from '@lucide/vue/dist/esm/icons/triangle-alert.mjs'
 import { getAllResults } from '../data/api.js'
 import { SURVEY, SURVEY_CHART, SURVEY_TEXT, questaoLabel } from '../data/survey-schema.js'
 
@@ -49,7 +51,7 @@ const total = computed(() => respostas.value.length)
       <LogoCNHF :height="32" />
       <div class="acts">
         <span class="meta muted">{{ total }} resposta(s)</span>
-        <button class="btn" @click="exportCsv">⬇ CSV</button>
+        <button class="btn" @click="exportCsv"><Download :size="15" :stroke-width="2" /> CSV</button>
       </div>
     </header>
 
@@ -106,7 +108,7 @@ const total = computed(() => respostas.value.length)
       </div>
     </div>
 
-    <p class="admin muted">⚠ Página administrativa. Na Fase 2 (Supabase) fica restrita à equipe por RLS/login de admin.</p>
+    <p class="admin muted"><TriangleAlert :size="13" :stroke-width="2" /> Página administrativa. Na Fase 2 (Supabase) fica restrita à equipe por RLS/login de admin.</p>
   </div>
 </template>
 
@@ -139,4 +141,5 @@ const total = computed(() => respostas.value.length)
 .abertas li { font-size: 13.5px; line-height: 1.5; padding-left: 12px; border-left: 2px solid var(--accent-line); }
 .abertas .quem { display: block; font-size: 11.5px; margin-bottom: 2px; }
 .admin { font-size: 12px; text-align: center; margin-top: 8px; }
+.admin svg { vertical-align: -2px; }
 </style>

@@ -2,6 +2,7 @@
 import { ref, onMounted, computed } from 'vue'
 import { useRouter } from 'vue-router'
 import LogoCNHF from '../components/LogoCNHF.vue'
+import ArrowLeft from '@lucide/vue/dist/esm/icons/arrow-left.mjs'
 import { listAnotacoes, criarAnotacao, atualizarAnotacao, removerAnotacao } from '../data/api.js'
 
 const router = useRouter()
@@ -69,7 +70,7 @@ function voltar() { router.push({ name: 'ambiente' }) }
   <div class="shell">
     <header class="top card">
       <LogoCNHF :height="34" />
-      <button class="btn ghost" @click="voltar">← Voltar ao ambiente</button>
+      <button class="btn ghost" @click="voltar"><ArrowLeft :size="16" :stroke-width="2" /> Voltar ao ambiente</button>
     </header>
 
     <section class="hero card">

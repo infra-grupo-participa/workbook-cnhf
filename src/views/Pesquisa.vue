@@ -2,6 +2,8 @@
 import { ref, computed } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import LogoCNHF from '../components/LogoCNHF.vue'
+import Check from '@lucide/vue/dist/esm/icons/check.mjs'
+import Copy from '@lucide/vue/dist/esm/icons/copy.mjs'
 import { SURVEY } from '../data/survey-schema.js'
 import { currentUser, submitSurvey, signUpComPesquisa } from '../data/api.js'
 
@@ -281,7 +283,7 @@ async function entrarNoAmbiente() {
     <Teleport to="body">
       <div v-if="acesso" class="overlay">
         <div class="pop card">
-          <div class="check">✓</div>
+          <div class="check"><Check :size="30" :stroke-width="3" /></div>
           <div class="eyebrow" style="text-align:center">Acesso liberado</div>
           <h3>Pronto! Seu acesso ao workbook está garantido</h3>
           <p class="muted"><strong>Anote a sua senha antes de continuar.</strong> Você vai usar estes dados para entrar no ambiente do aluno sempre que quiser.</p>
@@ -295,7 +297,10 @@ async function entrarNoAmbiente() {
               <span class="rot">Senha</span>
               <div class="senha-row">
                 <span class="val mono">{{ acesso.senha }}</span>
-                <button class="btn ghost sm" @click="copiarSenha">{{ copiado ? '✓ Copiada' : 'Copiar' }}</button>
+                <button class="btn ghost sm" @click="copiarSenha">
+                  <component :is="copiado ? Check : Copy" :size="15" :stroke-width="2.5" />
+                  {{ copiado ? 'Copiada' : 'Copiar' }}
+                </button>
               </div>
             </div>
           </div>

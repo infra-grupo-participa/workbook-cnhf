@@ -20,12 +20,19 @@ import express from 'express'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
 import { existsSync } from 'node:fs'
-import { execSync } from 'node:child_process'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
-const DIST = join(__dirname, 'dist')
 const PORT = process.env.PORT || 3000
 const HOST = process.env.HOST || '0.0.0.0'
+
+// Resolve a pasta dist/ de forma robusta: em algumas plataformas o cwd do
+// runtime difere do diretório do server.js. Procuramos nos locais prováveis.
+const CANDIDATOS = [
+  join(__dirname, 'dist'),
+  join(process.cwd(), 'dist'),
+  join(__dirname, '..', 'dist'),
+]
+const DIST = CANDIDATOS.find((d) => existsSync(join(d, 'index.html'))) || CANDIDATOS[0]
 
 const app = express()
 
@@ -33,22 +40,19 @@ const app = express()
 // HTTPS e IP real do cliente.
 app.set('trust proxy', true)
 
-// Garante que o build exista antes de subir.
-// Garante o build. Em plataformas que rodam o build separadamente (Hostinger
-// Node app), o dist/ já existe. Se não existir (ex.: start "cru"), buildamos
-// aqui em vez de derrubar o processo — evita 503 por dist ausente no boot.
-if (!existsSync(join(DIST, 'index.html'))) {
-  console.warn('[workbook] dist/ ausente — rodando "vite build" no boot...')
-  try {
-    execSync('npm run build', { cwd: __dirname, stdio: 'inherit' })
-  } catch (e) {
-    console.error('[workbook] falha ao buildar no boot:', e.message)
-    process.exit(1)
-  }
+// O build (dist/) é gerado na fase de build da plataforma. NÃO buildamos nem
+// derrubamos o processo em runtime — fazer isso trava o boot e gera 503 em loop.
+// Se o dist/ faltar, o servidor sobe mesmo assim e reporta o estado (melhor que
+// um processo que morre e reinicia sem parar).
+const distOk = existsSync(join(DIST, 'index.html'))
+if (!distOk) {
+  console.error(`[workbook] AVISO: ${join(DIST, 'index.html')} não encontrado. Rode "npm run build".`)
 }
 
-// Healthcheck simples para a plataforma de deploy.
-app.get('/health', (_req, res) => res.json({ ok: true, service: 'workbook-cnhf' }))
+// Healthcheck simples para a plataforma de deploy. Sempre responde.
+app.get('/health', (_req, res) =>
+  res.json({ ok: true, service: 'workbook-cnhf', distOk })
+)
 
 // ------------------------------------------------------------
 // (FASE 2) Endpoints de back-end vão AQUI, antes do fallback SPA.
@@ -71,9 +75,19 @@ app.use(
 // (O vue-router usa hash history, mas isso garante que /login, etc.
 //  abram o app mesmo se alguém digitar o caminho direto.)
 app.get('*', (req, res) => {
-  res.sendFile(join(DIST, 'index.html'))
+  const index = join(DIST, 'index.html')
+  if (!existsSync(index)) {
+    return res.status(503).type('text/plain').send('Build ausente. Rode "npm run build".')
+  }
+  res.sendFile(index, (err) => {
+    if (err && !res.headersSent) res.status(500).end()
+  })
 })
 
+// Nunca deixar o processo morrer por um erro não tratado (evita 503 cíclico).
+process.on('uncaughtException', (e) => console.error('[workbook] uncaughtException:', e))
+process.on('unhandledRejection', (e) => console.error('[workbook] unhandledRejection:', e))
+
 app.listen(PORT, HOST, () => {
-  console.log(`[workbook] servindo dist/ em http://${HOST}:${PORT}`)
+  console.log(`[workbook] servindo dist/ em http://${HOST}:${PORT} (distOk=${distOk})`)
 })

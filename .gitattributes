@@ -1,0 +1,2 @@
+# Preserva o build versionado sem conversão de fim de linha (byte-idêntico ao Vite).
+dist/** -text

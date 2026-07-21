@@ -1,5 +1,7 @@
 node_modules/
-dist/
+# dist/ É versionado de propósito: a Hostinger Node app às vezes reinicia o
+# processo sem o build no lugar, mostrando "preparando...". Com dist/ no repo,
+# ele sempre existe no runtime. Rebuildar e committar o dist junto a cada mudança.
 .DS_Store
 # nunca commitar credenciais de FTP/Supabase
 .env

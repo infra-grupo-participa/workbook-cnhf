@@ -109,8 +109,12 @@ function escolher(op) {
   respostas.value[q.id] = op
   erro.value = ''
   if (q.revela) {
+    // limpa sub-campos órfãos de OUTROS gatilhos — mas preserva o campo cujo id
+    // é o mesmo do gatilho atual (ex.: 'origem_cliente' compartilhado entre
+    // "De 4 a 10" e "Mais de 10").
+    const idAtual = q.revela[op]?.id
     for (const [gatilho, campo] of Object.entries(q.revela)) {
-      if (gatilho !== op) delete respostas.value[campo.id]
+      if (gatilho !== op && campo.id !== idAtual) delete respostas.value[campo.id]
     }
   }
   if (q.revela && q.revela[op]) return       // mostra o sub-campo; avança no botão
@@ -285,16 +289,31 @@ const eyebrow = computed(() => {
             >{{ op }}</button>
           </div>
 
-          <!-- sub-campo condicional (desdobramento): ex. "Outra → qual?" -->
+          <!-- sub-campo condicional (desdobramento): "raiz do lead" -->
           <Transition name="fade">
-            <label v-if="condicionalAtual" class="field condicional" :key="condicionalAtual.id">
-              <span>{{ condicionalAtual.label }}<em v-if="condicionalAtual.obrigatoria" class="obrig">*</em></span>
-              <input
-                type="text" v-model="respostas[condicionalAtual.id]"
-                :placeholder="condicionalAtual.placeholder"
-                @keydown.enter="avancar"
-              />
-            </label>
+            <div v-if="condicionalAtual" class="condicional" :key="condicionalAtual.id">
+              <div class="cond-label">
+                {{ condicionalAtual.label }}<em v-if="condicionalAtual.obrigatoria" class="obrig">*</em>
+              </div>
+
+              <!-- sub-pergunta tipo radio (categorias padronizadas) -->
+              <div v-if="condicionalAtual.tipo === 'radio'" class="opcoes">
+                <button
+                  v-for="op in condicionalAtual.opcoes" :key="op" type="button"
+                  class="op" :class="{ sel: respostas[condicionalAtual.id] === op }"
+                  @click="respostas[condicionalAtual.id] = op; erro = ''"
+                >{{ op }}</button>
+              </div>
+
+              <!-- sub-pergunta tipo texto -->
+              <label v-else class="field">
+                <input
+                  type="text" v-model="respostas[condicionalAtual.id]"
+                  :placeholder="condicionalAtual.placeholder"
+                  @keydown.enter="avancar"
+                />
+              </label>
+            </div>
           </Transition>
 
           <textarea
@@ -376,6 +395,7 @@ const eyebrow = computed(() => {
 .field.grande input { font-size: 17px; padding: 15px 16px; }
 .erro-campo { color: var(--bad); font-size: 12.5px; font-weight: 600; margin-top: 6px; display: block; }
 .condicional { margin-top: 18px; padding-top: 18px; border-top: 1px solid var(--stroke); }
+.cond-label { font-size: 16px; font-weight: 700; line-height: 1.35; margin-bottom: 12px; }
 .obrig { color: var(--accent); font-style: normal; font-weight: 700; margin-left: 2px; }
 textarea { min-height: 140px; font-size: 15.5px; margin-top: 4px; }
 

@@ -152,7 +152,7 @@ export function gerarSenha(len = 10) {
  * Retorna { ok, senha, email } em sucesso.
  * códigos de erro: EXISTS (e-mail já respondeu / já tem acesso) | ERROR
  */
-export async function signUpComPesquisa({ email, nome, answers }) {
+export async function signUpComPesquisa({ email, nome, telefone, answers }) {
   const e = norm(email)
   const senha = gerarSenha()
 
@@ -163,6 +163,8 @@ export async function signUpComPesquisa({ email, nome, answers }) {
       data: {
         sistema: 'workbook',
         nome: nome || '',
+        // o trigger handle_new_user grava telefone do raw_user_meta_data em workbook.leads
+        telefone: telefone || null,
       },
       emailRedirectTo: `${location.origin}${location.pathname}`,
     },
@@ -184,7 +186,7 @@ export async function signUpComPesquisa({ email, nome, answers }) {
   // criado neste ponto — se o insert da pesquisa falhar (rede etc.), NÃO
   // travamos o lead com EXISTS numa retentativa: retornamos ok assim mesmo
   // (o acesso é o entregável) e sinalizamos surveyPending para uma retentativa.
-  const reg = await submitSurvey(e, answers, nome)
+  const reg = await submitSurvey(e, answers, nome, telefone)
   return { ok: true, senha, email: e, surveyPending: !reg.ok }
 }
 
@@ -239,7 +241,7 @@ export async function hasSurvey(_email) {
   return (count ?? 0) > 0
 }
 
-export async function submitSurvey(_email, answers, nome) {
+export async function submitSurvey(_email, answers, nome, telefone) {
   const uid = currentUserId()
   if (!uid) return { ok: false, code: 'NO_SESSION' }
   const email = currentUser()
@@ -247,13 +249,14 @@ export async function submitSurvey(_email, answers, nome) {
   // índice de saúde da resposta (qualidade + flags de priorização)
   const { score, flags } = avaliarSaude({ nome: nome ?? _perfil?.nome, email, answers })
 
-  // deduplicação: já existe outra resposta com o mesmo e-mail? (chave de cruzamento)
-  const duplicado = await ehDuplicado({ uid, email })
+  // deduplicação: já existe outra resposta com o mesmo e-mail ou telefone?
+  const duplicado = await ehDuplicado({ uid, email, telefone })
 
   const registro = {
     user_id: uid,
     email,
     nome: nome ?? _perfil?.nome ?? '',
+    telefone: telefone || null,
     answers,
     health_score: score,
     health_flags: flags,
@@ -273,10 +276,10 @@ export async function submitSurvey(_email, answers, nome) {
  * o próprio user ler suas linhas, então a checagem cruzada roda via RPC
  * security definer. Se a RPC falhar, retorna false (não bloqueia o cadastro).
  */
-async function ehDuplicado({ uid, email }) {
+async function ehDuplicado({ uid, email, telefone }) {
   try {
     const { data, error } = await supabase.rpc('resposta_duplicada', {
-      p_user_id: uid, p_email: norm(email), p_telefone: null,
+      p_user_id: uid, p_email: norm(email), p_telefone: telefone || null,
     })
     if (error) return false
     return !!data

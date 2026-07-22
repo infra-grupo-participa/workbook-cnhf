@@ -20,19 +20,20 @@ const modoPublico = !emailLogado
 const travado = route.query.motivo === 'trava'
 
 // dados de contato — pedidos SÓ no fim, no modo público. O e-mail é a chave
-// de cruzamento; WhatsApp não é coletado.
-const contato = ref({ nome: '', email: '' })
+// de cruzamento/login; o WhatsApp vai pro CS.
+const contato = ref({ nome: '', email: '', telefone: '' })
 const respostas = ref({})
 
 // FLUXO EM PASSOS (uma pergunta por tela):
 //   0 .. TOTAL-1  → perguntas de qualificação
 //   [público] TOTAL   → tela do E-MAIL
-//   [público] TOTAL+1 → tela do NOME
-// Ordem dos dados pessoais: e-mail primeiro (é a chave de acesso/cruzamento),
-// depois o nome.
+//   [público] TOTAL+1 → tela do WHATSAPP
+//   [público] TOTAL+2 → tela do NOME
+// Ordem dos dados pessoais: e-mail (chave de acesso) → WhatsApp → nome.
 const TOTAL = SURVEY.length
 const PASSO_EMAIL = TOTAL
-const PASSO_NOME = TOTAL + 1
+const PASSO_WHATS = TOTAL + 1
+const PASSO_NOME = TOTAL + 2
 const ultimoPasso = modoPublico ? PASSO_NOME : TOTAL - 1
 
 const passo = ref(0)
@@ -47,10 +48,11 @@ const atual = computed(() => SURVEY[passo.value] || null)     // pergunta atual 
 const naPergunta = computed(() => passo.value <= TOTAL - 1)
 const noNome = computed(() => passo.value === PASSO_NOME)
 const noEmail = computed(() => passo.value === PASSO_EMAIL)
+const noWhats = computed(() => passo.value === PASSO_WHATS)
 const ehUltimo = computed(() => passo.value === ultimoPasso)
 
-// progresso: total de telas = perguntas (+ nome + e-mail no público)
-const etapasTotais = modoPublico ? TOTAL + 2 : TOTAL
+// progresso: total de telas = perguntas (+ e-mail + WhatsApp + nome no público)
+const etapasTotais = modoPublico ? TOTAL + 3 : TOTAL
 const preenchidoAtual = computed(() => {
   if (naPergunta.value) {
     const v = respostas.value[atual.value.id]
@@ -66,11 +68,12 @@ const preenchidoAtual = computed(() => {
   }
   if (noNome.value) return !checarNome()
   if (noEmail.value) return !checarEmail()
+  if (noWhats.value) return !checarWhats()
   return false
 })
 
 // erros por campo
-const erros = ref({ nome: '', email: '' })
+const erros = ref({ nome: '', email: '', telefone: '' })
 const emailValido = (e) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(e || '').trim())
 
 // --- formatadores (evitam dado quebrado entrando na planilha) ---
@@ -83,6 +86,16 @@ function normalizarNome(v) {
 }
 function blurNome() { contato.value.nome = normalizarNome(contato.value.nome); erros.value.nome = checarNome() }
 function blurEmail() { contato.value.email = String(contato.value.email || '').trim().toLowerCase(); erros.value.email = checarEmail() }
+function blurWhats() { erros.value.telefone = checarWhats() }
+
+// máscara de telefone em tempo real: (XX) XXXXX-XXXX, só dígitos, máx 11.
+function mascararTelefone(v) {
+  const d = String(v || '').replace(/\D/g, '').slice(0, 11)
+  if (d.length <= 2) return d.replace(/^(\d*)/, '($1')
+  if (d.length <= 6) return d.replace(/^(\d{2})(\d*)/, '($1) $2')
+  if (d.length <= 10) return d.replace(/^(\d{2})(\d{4})(\d*)/, '($1) $2-$3')
+  return d.replace(/^(\d{2})(\d{5})(\d*)/, '($1) $2-$3')
+}
 
 function checarNome() {
   const n = normalizarNome(contato.value.nome)
@@ -95,6 +108,12 @@ function checarEmail() {
   const e = String(contato.value.email || '').trim().toLowerCase()
   if (!e) return 'Informe o seu e-mail.'
   if (!emailValido(e)) return 'Informe um e-mail válido (ex.: nome@email.com).'
+  return ''
+}
+function checarWhats() {
+  const d = String(contato.value.telefone || '').replace(/\D/g, '')
+  if (!d) return 'Informe o seu WhatsApp com DDD.'
+  if (d.length < 10 || d.length > 11) return 'Informe o DDD + número completo.'
   return ''
 }
 
@@ -155,6 +174,12 @@ function avancar() {
     passo.value++
     return
   }
+  if (noWhats.value) {
+    erros.value.telefone = checarWhats()
+    if (erros.value.telefone) { erro.value = erros.value.telefone; return }
+    passo.value++
+    return
+  }
   if (noNome.value) {
     erros.value.nome = checarNome()
     if (erros.value.nome) { erro.value = erros.value.nome; return }
@@ -184,6 +209,7 @@ async function finalizar() {
     const r = await signUpComPesquisa({
       email: contato.value.email,
       nome: contato.value.nome,
+      telefone: contato.value.telefone.replace(/\D/g, ''),
       answers: { ...respostas.value },
     })
     enviando.value = false
@@ -220,7 +246,7 @@ async function entrarNoAmbiente() {
 
 // rótulo do topo (contexto de cada tela)
 const eyebrow = computed(() => {
-  if (noNome.value || noEmail.value) return 'Quase lá · seus dados de acesso'
+  if (noNome.value || noEmail.value || noWhats.value) return 'Quase lá · seus dados de acesso'
   return `Pesquisa de qualificação · pergunta ${passo.value + 1} de ${TOTAL}`
 })
 </script>
@@ -346,6 +372,21 @@ const eyebrow = computed(() => {
               @input="erros.email = ''" @blur="blurEmail" @keydown.enter="avancar"
             />
             <small v-if="erros.email" class="erro-campo">{{ erros.email }}</small>
+          </label>
+        </div>
+
+        <!-- TELA DO WHATSAPP -->
+        <div v-else-if="noWhats" key="whats" class="q">
+          <div class="q-label">Qual o seu WhatsApp?</div>
+          <p class="q-ajuda muted">É por onde a nossa equipe fala com você sobre o curso.</p>
+          <label class="field grande">
+            <input
+              type="tel" :value="contato.telefone" placeholder="(11) 99999-9999"
+              autocomplete="tel" inputmode="numeric" maxlength="16" :class="{ invalido: erros.telefone }"
+              @input="contato.telefone = mascararTelefone($event.target.value); erros.telefone = ''"
+              @blur="blurWhats" @keydown.enter="avancar"
+            />
+            <small v-if="erros.telefone" class="erro-campo">{{ erros.telefone }}</small>
           </label>
         </div>
 

@@ -26,12 +26,14 @@ const respostas = ref({})
 
 // FLUXO EM PASSOS (uma pergunta por tela):
 //   0 .. TOTAL-1  → perguntas de qualificação
-//   [público] TOTAL   → tela do NOME
-//   [público] TOTAL+1 → tela do E-MAIL
+//   [público] TOTAL   → tela do E-MAIL
+//   [público] TOTAL+1 → tela do NOME
+// Ordem dos dados pessoais: e-mail primeiro (é a chave de acesso/cruzamento),
+// depois o nome.
 const TOTAL = SURVEY.length
-const PASSO_NOME = TOTAL
-const PASSO_EMAIL = TOTAL + 1
-const ultimoPasso = modoPublico ? PASSO_EMAIL : TOTAL - 1
+const PASSO_EMAIL = TOTAL
+const PASSO_NOME = TOTAL + 1
+const ultimoPasso = modoPublico ? PASSO_NOME : TOTAL - 1
 
 const passo = ref(0)
 const enviando = ref(false)
@@ -121,6 +123,17 @@ function escolher(op) {
   setTimeout(() => { if (passo.value < ultimoPasso) passo.value++ }, 220)
 }
 
+// clique numa opção da SUB-pergunta (radio condicional): seleciona e, como ela
+// é a última coisa que faltava nesta tela, também auto-avança — mesmo ritmo do
+// card principal, pra não obrigar o lead a caçar o botão "Continuar".
+function escolherCondicional(op) {
+  const cond = condicionalAtual.value
+  if (!cond) return
+  respostas.value[cond.id] = op
+  erro.value = ''
+  setTimeout(() => { if (passo.value < ultimoPasso) passo.value++ }, 220)
+}
+
 function avancar() {
   erro.value = ''
   if (naPergunta.value) {
@@ -135,17 +148,17 @@ function avancar() {
     passo.value++
     return
   }
-  if (noNome.value) {
-    erros.value.nome = checarNome()
-    if (erros.value.nome) { erro.value = erros.value.nome; return }
-    contato.value.nome = normalizarNome(contato.value.nome)
-    passo.value++
-    return
-  }
   if (noEmail.value) {
     erros.value.email = checarEmail()
     if (erros.value.email) { erro.value = erros.value.email; return }
     contato.value.email = contato.value.email.trim().toLowerCase()
+    passo.value++
+    return
+  }
+  if (noNome.value) {
+    erros.value.nome = checarNome()
+    if (erros.value.nome) { erro.value = erros.value.nome; return }
+    contato.value.nome = normalizarNome(contato.value.nome)
     return finalizar()
   }
 }
@@ -301,7 +314,7 @@ const eyebrow = computed(() => {
                 <button
                   v-for="op in condicionalAtual.opcoes" :key="op" type="button"
                   class="op" :class="{ sel: respostas[condicionalAtual.id] === op }"
-                  @click="respostas[condicionalAtual.id] = op; erro = ''"
+                  @click="escolherCondicional(op)"
                 >{{ op }}</button>
               </div>
 
@@ -322,22 +335,8 @@ const eyebrow = computed(() => {
           />
         </div>
 
-        <!-- TELA DO NOME -->
-        <div v-else-if="noNome" key="nome" class="q">
-          <div class="q-label">Como é o seu nome completo?</div>
-          <p class="q-ajuda muted">É assim que vamos te chamar no ambiente do aluno.</p>
-          <label class="field grande">
-            <input
-              type="text" v-model="contato.nome" placeholder="Seu nome completo"
-              autocomplete="name" :class="{ invalido: erros.nome }"
-              @input="erros.nome = ''" @blur="blurNome" @keydown.enter="avancar"
-            />
-            <small v-if="erros.nome" class="erro-campo">{{ erros.nome }}</small>
-          </label>
-        </div>
-
         <!-- TELA DO E-MAIL -->
-        <div v-else key="email" class="q">
+        <div v-else-if="noEmail" key="email" class="q">
           <div class="q-label">Qual o seu melhor e-mail?</div>
           <p class="q-ajuda muted">Será o seu login de acesso — use o mesmo e-mail da sua inscrição.</p>
           <label class="field grande">
@@ -347,6 +346,20 @@ const eyebrow = computed(() => {
               @input="erros.email = ''" @blur="blurEmail" @keydown.enter="avancar"
             />
             <small v-if="erros.email" class="erro-campo">{{ erros.email }}</small>
+          </label>
+        </div>
+
+        <!-- TELA DO NOME -->
+        <div v-else key="nome" class="q">
+          <div class="q-label">Como é o seu nome completo?</div>
+          <p class="q-ajuda muted">É assim que vamos te chamar no ambiente do aluno.</p>
+          <label class="field grande">
+            <input
+              type="text" v-model="contato.nome" placeholder="Seu nome completo"
+              autocomplete="name" :class="{ invalido: erros.nome }"
+              @input="erros.nome = ''" @blur="blurNome" @keydown.enter="avancar"
+            />
+            <small v-if="erros.nome" class="erro-campo">{{ erros.nome }}</small>
           </label>
         </div>
       </Transition>

@@ -66,7 +66,17 @@ export const SURVEY = [
       'Já atuo e sigo um método bem definido',
     ],
     revela: {
-      // já atua com método → há quanto tempo? (maturidade, sem citar nomes)
+      // já atua (com ou sem método) → há quanto tempo? (maturidade, sem citar
+      // nomes). As duas respostas de "já atuo" pedem o tempo de atuação; o id é
+      // o mesmo ('atua_tempo') para o dashboard consolidar num só gráfico.
+      'Já atuo, mas não com um método claro': {
+        id: 'atua_tempo', tipo: 'radio', chart: true, obrigatoria: true,
+        label: 'Há quanto tempo você atua com Holding Familiar?',
+        opcoes: [
+          'Menos de 1 ano',
+          'De 1 a 3 anos',
+          'Mais de 3 anos',
+        ] },
       'Já atuo e sigo um método bem definido': {
         id: 'atua_tempo', tipo: 'radio', chart: true, obrigatoria: true,
         label: 'Há quanto tempo você atua com Holding Familiar?',

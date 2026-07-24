@@ -72,14 +72,18 @@ export function avaliarSaude({ nome, email, answers = {} }) {
   if (okNome) score += 35; else flags.push('suspeito_nome')
   if (okEmail) score += 30; else flags.push('suspeito_email')
   if (okTexto) score += 20; else flags.push('suspeito_texto')
-  // completou todas as perguntas de qualificação
-  const qualif = ['area', 'faturamento', 'objetivo']
+  // completou todas as perguntas de qualificação (objetivas)
+  const qualif = ['area', 'faturamento']
   if (qualif.every((k) => answers[k])) score += 15
 
   // --- flags de negócio (priorização) ---
   if (answers.faturamento === 'Acima de R$ 30 mil') flags.push('prioridade_faturamento')
 
-  const dor = limpo(answers.dificuldade) + ' ' + limpo(answers.dificuldade_comecar) + ' ' + limpo(answers.objetivo)
+  // varre TODAS as perguntas de dor (texto aberto) por "não sei por onde começar"
+  const dor = [
+    answers.dificuldade, answers.dificuldade_comecar,
+    answers.dificuldade_holding_principal, answers.mundo_sonhos,
+  ].map(limpo).join(' ')
   if (/n[aã]o sei por onde come|nao sei come|por onde come[cç]|do zero|começar do/.test(dor)) {
     flags.push('nao_sabe_comecar')
   }

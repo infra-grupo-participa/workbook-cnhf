@@ -17,32 +17,35 @@
                    profundidade (uma sub-pergunta por opção-gatilho).
    ============================================================ */
 export const SURVEY = [
-  // Profissão (era "área de atuação"). Sem nó: não perguntamos mais QUAL
-  // profissão quando marca "Outra" (decisão do Marcio, 2026-07-23). id
-  // mantido como 'area' p/ não quebrar dashboard/health/espelhamento.
+  // 1. Profissão (era "área de atuação"). Opções fixas → gráfico + mapeia o
+  // enum de profissão no dashboard/CRM. id mantido como 'area' p/ não quebrar
+  // dashboard/health/espelhamento.
   { id: 'area', tipo: 'radio', chart: true, obrigatoria: true,
-    label: 'Qual a sua profissão?',
+    label: 'Qual é a sua profissão?',
     opcoes: ['Advocacia', 'Contabilidade', 'Outra'] },
 
+  // 2. Faturamento (dado objetivo; alimenta a flag prioridade_faturamento >30k).
   { id: 'faturamento', tipo: 'radio', chart: true, obrigatoria: true,
     label: 'Qual o seu faturamento mensal estimado?',
     opcoes: ['Até R$ 5 mil', 'R$ 5 a 15 mil', 'R$ 15 a 30 mil', 'Acima de R$ 30 mil'] },
 
-  { id: 'objetivo', tipo: 'radio', chart: true, obrigatoria: true,
-    label: 'Qual o seu principal objetivo com o Curso Nacional?',
-    opcoes: [
-      'Criar uma nova fonte de receita',
-      'Me aprofundar tecnicamente',
-      'Atender um cliente que já tenho',
-      'Ainda estou explorando',
-    ] },
-
+  // 3. Dificuldade profissional / carreira (aberta).
   { id: 'dificuldade', tipo: 'textarea', chart: false, obrigatoria: true,
-    label: 'Qual a sua maior dificuldade ou dúvida com Holding Familiar hoje?',
+    label: 'Qual é a maior dificuldade profissional que você enfrenta hoje?',
     placeholder: 'Escreve com as suas palavras...' },
 
-  // Nova (Marcio, 2026-07-23): a dificuldade percebida para COMEÇAR — pedida
-  // "antes do pitch". Texto aberto, entra na varredura de dor (nao_sabe_comecar).
+  // 4. Obstáculo p/ tornar a holding familiar a PRINCIPAL área de atuação (aberta).
+  { id: 'dificuldade_holding_principal', tipo: 'textarea', chart: false, obrigatoria: true,
+    label: 'Que tipo de dificuldade ou obstáculo você acredita que pode ter para fazer o trabalho com Holding Familiar ser a sua principal área de atuação?',
+    placeholder: 'Escreve com as suas palavras...' },
+
+  // 5. "Mundo dos sonhos": o que a carreira deveria entregar e ainda não entrega (aberta).
+  { id: 'mundo_sonhos', tipo: 'textarea', chart: false, obrigatoria: true,
+    label: 'No seu mundo dos sonhos, o que você esperaria que a sua carreira estivesse te entregando e que ainda não está?',
+    placeholder: 'Escreve com as suas palavras...' },
+
+  // 6. (antes do pitch) dificuldade percebida para COMEÇAR. Entra na varredura
+  // de dor (nao_sabe_comecar). Fecha a pesquisa.
   { id: 'dificuldade_comecar', tipo: 'textarea', chart: false, obrigatoria: true,
     label: 'Qual dificuldade você acredita que terá para começar a trabalhar com Holding Familiar?',
     placeholder: 'Escreve com as suas palavras...' },

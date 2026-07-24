@@ -17,90 +17,12 @@
                    profundidade (uma sub-pergunta por opção-gatilho).
    ============================================================ */
 export const SURVEY = [
+  // Profissão (era "área de atuação"). Sem nó: não perguntamos mais QUAL
+  // profissão quando marca "Outra" (decisão do Marcio, 2026-07-23). id
+  // mantido como 'area' p/ não quebrar dashboard/health/espelhamento.
   { id: 'area', tipo: 'radio', chart: true, obrigatoria: true,
-    label: 'Qual a sua área de atuação?',
-    opcoes: ['Advocacia', 'Contabilidade', 'Outra'],
-    revela: {
-      // "Outra" → qual? (se muita gente de outra área entra, é público errado)
-      'Outra': { id: 'area_outra', tipo: 'texto', obrigatoria: true,
-        label: 'Qual é a sua área de atuação?',
-        placeholder: 'Ex.: administração, corretagem, engenharia...' },
-    } },
-
-  { id: 'formacao_holding', tipo: 'radio', chart: true, obrigatoria: true,
-    label: 'Você já tem alguma formação ou estudo sobre Holding Familiar?',
-    opcoes: [
-      'Nunca estudei sobre isso',
-      'Estudei por conta própria',
-      'Já fiz algum curso ou formação',
-    ],
-    revela: {
-      // já tem formação → conhecer a RAIZ: onde/como aprendeu (categorias abertas)
-      'Já fiz algum curso ou formação': {
-        id: 'formacao_origem', tipo: 'radio', chart: true, obrigatoria: true,
-        label: 'Onde você teve essa formação sobre Holding Familiar?',
-        opcoes: [
-          'Mentoria ou curso pago',
-          'Faculdade ou pós-graduação',
-          'Curso online ou conteúdo gratuito',
-          'Aprendi na prática, no dia a dia',
-          'Outro',
-        ] },
-      'Estudei por conta própria': {
-        id: 'estudo_como', tipo: 'radio', chart: true, obrigatoria: true,
-        label: 'Como você tem estudado sobre Holding Familiar?',
-        opcoes: [
-          'Vídeos e conteúdos gratuitos',
-          'Livros e materiais técnicos',
-          'Conversando com colegas da área',
-          'Na prática, com meus próprios casos',
-          'Outro',
-        ] },
-    } },
-
-  { id: 'atua_holding', tipo: 'radio', chart: true, obrigatoria: true,
-    label: 'Você atua com Holding Familiar hoje?',
-    opcoes: [
-      'Não atuo',
-      'Já atuo, mas não com um método claro',
-      'Já atuo e sigo um método bem definido',
-    ],
-    revela: {
-      // já atua (com ou sem método) → há quanto tempo? (maturidade, sem citar
-      // nomes). As duas respostas de "já atuo" pedem o tempo de atuação; o id é
-      // o mesmo ('atua_tempo') para o dashboard consolidar num só gráfico.
-      'Já atuo, mas não com um método claro': {
-        id: 'atua_tempo', tipo: 'radio', chart: true, obrigatoria: true,
-        label: 'Há quanto tempo você atua com Holding Familiar?',
-        opcoes: [
-          'Menos de 1 ano',
-          'De 1 a 3 anos',
-          'Mais de 3 anos',
-        ] },
-      'Já atuo e sigo um método bem definido': {
-        id: 'atua_tempo', tipo: 'radio', chart: true, obrigatoria: true,
-        label: 'Há quanto tempo você atua com Holding Familiar?',
-        opcoes: [
-          'Menos de 1 ano',
-          'De 1 a 3 anos',
-          'Mais de 3 anos',
-        ] },
-    } },
-
-  { id: 'quantos_clientes', tipo: 'radio', chart: true, obrigatoria: true,
-    label: 'Quantas Holdings Familiares você já estruturou para clientes?',
-    opcoes: ['Nenhuma ainda', 'De 1 a 3', 'De 4 a 10', 'Mais de 10'],
-    revela: {
-      // já estruturou → como chega esse cliente hoje? (origem de demanda)
-      'De 4 a 10': {
-        id: 'origem_cliente', tipo: 'radio', chart: true, obrigatoria: true,
-        label: 'De onde vêm a maioria dos seus clientes de Holding?',
-        opcoes: ['Indicação', 'Marketing/redes sociais', 'Minha carteira atual', 'Outro'] },
-      'Mais de 10': {
-        id: 'origem_cliente', tipo: 'radio', chart: true, obrigatoria: true,
-        label: 'De onde vêm a maioria dos seus clientes de Holding?',
-        opcoes: ['Indicação', 'Marketing/redes sociais', 'Minha carteira atual', 'Outro'] },
-    } },
+    label: 'Qual a sua profissão?',
+    opcoes: ['Advocacia', 'Contabilidade', 'Outra'] },
 
   { id: 'faturamento', tipo: 'radio', chart: true, obrigatoria: true,
     label: 'Qual o seu faturamento mensal estimado?',
@@ -117,6 +39,12 @@ export const SURVEY = [
 
   { id: 'dificuldade', tipo: 'textarea', chart: false, obrigatoria: true,
     label: 'Qual a sua maior dificuldade ou dúvida com Holding Familiar hoje?',
+    placeholder: 'Escreve com as suas palavras...' },
+
+  // Nova (Marcio, 2026-07-23): a dificuldade percebida para COMEÇAR — pedida
+  // "antes do pitch". Texto aberto, entra na varredura de dor (nao_sabe_comecar).
+  { id: 'dificuldade_comecar', tipo: 'textarea', chart: false, obrigatoria: true,
+    label: 'Qual dificuldade você acredita que terá para começar a trabalhar com Holding Familiar?',
     placeholder: 'Escreve com as suas palavras...' },
 ]
 

@@ -50,10 +50,12 @@ export function textoPlausivel(txt) {
  *   flags: string[] p/ priorização/segmentação no dashboard
  * Flags de negócio possíveis:
  *   'prioridade_faturamento'  → faturamento acima de R$ 30k
- *   'concorrente'             → já usa método (identificar Pablo Arruda, Igor…)
  *   'nao_sabe_comecar'        → dor "não sei por onde começar"
- *   'area_outra'              → área fora de Advocacia/Contabilidade
  *   'suspeito_nome'/'suspeito_email'/'suspeito_texto' → possível lixo
+ *
+ * (Questionário enxugado em 2026-07-23: saíram as perguntas de formação,
+ * atuação e nº de clientes; a antiga flag 'concorrente' e 'area_outra' foram
+ * removidas junto. A pergunta 'area' agora é a PROFISSÃO.)
  *
  * Obs.: a pesquisa NÃO coleta telefone (só nome + e-mail; o e-mail é a chave
  * de cruzamento). Peso: nome 35 + e-mail 30 + texto 20 + qualificação 15.
@@ -71,15 +73,13 @@ export function avaliarSaude({ nome, email, answers = {} }) {
   if (okEmail) score += 30; else flags.push('suspeito_email')
   if (okTexto) score += 20; else flags.push('suspeito_texto')
   // completou todas as perguntas de qualificação
-  const qualif = ['area', 'atua_holding', 'faturamento', 'objetivo']
+  const qualif = ['area', 'faturamento', 'objetivo']
   if (qualif.every((k) => answers[k])) score += 15
 
   // --- flags de negócio (priorização) ---
   if (answers.faturamento === 'Acima de R$ 30 mil') flags.push('prioridade_faturamento')
-  if (answers.atua_holding === 'Já atuo e sigo um método bem definido') flags.push('concorrente')
-  if (answers.area === 'Outra') flags.push('area_outra')
 
-  const dor = limpo(answers.dificuldade) + ' ' + limpo(answers.objetivo)
+  const dor = limpo(answers.dificuldade) + ' ' + limpo(answers.dificuldade_comecar) + ' ' + limpo(answers.objetivo)
   if (/n[aã]o sei por onde come|nao sei come|por onde come[cç]|do zero|começar do/.test(dor)) {
     flags.push('nao_sabe_comecar')
   }

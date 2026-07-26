@@ -1,15 +1,18 @@
 import { createRouter, createWebHashHistory } from 'vue-router'
 import { currentUser, hasSurvey, isAdmin } from './data/api.js'
 
-import Login from './views/Login.vue'
-import CriarAcesso from './views/CriarAcesso.vue'
-import EsqueciSenha from './views/EsqueciSenha.vue'
-import RedefinirSenha from './views/RedefinirSenha.vue'
-import Pesquisa from './views/Pesquisa.vue'
-import Ambiente from './views/Ambiente.vue'
-import Workbook from './views/Workbook.vue'
-import Anotacoes from './views/Anotacoes.vue'
-import Resultados from './views/Resultados.vue'
+// Views carregadas sob demanda (code-splitting): cada rota vira um chunk
+// próprio, então o bundle inicial (login/pesquisa) não carrega o conteúdo do
+// workbook (~55 KB) nem o Resultados/admin até serem realmente acessados.
+import Login from './views/Login.vue'          // eager: 1ª tela do funil
+import Pesquisa from './views/Pesquisa.vue'    // eager: porta de entrada pública
+const CriarAcesso = () => import('./views/CriarAcesso.vue')
+const EsqueciSenha = () => import('./views/EsqueciSenha.vue')
+const RedefinirSenha = () => import('./views/RedefinirSenha.vue')
+const Ambiente = () => import('./views/Ambiente.vue')
+const Workbook = () => import('./views/Workbook.vue')
+const Anotacoes = () => import('./views/Anotacoes.vue')
+const Resultados = () => import('./views/Resultados.vue')
 
 /*
   Rotas com hash (#/...) para funcionar em hospedagem estática (Hostinger)

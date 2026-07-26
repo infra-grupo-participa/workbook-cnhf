@@ -1,14 +1,13 @@
 <script setup>
-import { ref, computed, reactive, onMounted, onBeforeUnmount, watch, nextTick } from 'vue'
+import { ref, computed, reactive, onMounted, onBeforeUnmount, nextTick } from 'vue'
 import { useRouter } from 'vue-router'
 import LogoCNHF from '../components/LogoCNHF.vue'
 import ArrowLeft from '@lucide/vue/dist/esm/icons/arrow-left.mjs'
 import Check from '@lucide/vue/dist/esm/icons/check.mjs'
-import { currentUser } from '../data/api.js'
-import { getWorkbook, saveWorkbook, getLead } from '../data/api.js'
-import { WORKBOOK, ANCORA } from '../data/workbook-content.js'
-import { imprimeWorkbook } from '../data/book-print.js'
 import Download from '@lucide/vue/dist/esm/icons/download.mjs'
+import { currentUser, getWorkbook, saveWorkbook, getLead } from '../data/api.js'
+import { WORKBOOK, ANCORA } from '../data/workbook-content.js'
+// book-print (gera o HTML/CSS do PDF) só é necessário ao baixar → import dinâmico
 
 const router = useRouter()
 
@@ -94,12 +93,19 @@ function autoGrow(e) {
 
 // baixar "meu workbook preenchido" em PDF (via janela de impressão do navegador)
 const nomeAluno = ref('')
+const gerandoPdf = ref(false)
 async function baixarPdf() {
   flush()
-  if (!nomeAluno.value) {
-    const l = await getLead(currentUser()); nomeAluno.value = l?.nome || ''
+  gerandoPdf.value = true
+  try {
+    if (!nomeAluno.value) {
+      const l = await getLead(currentUser()); nomeAluno.value = l?.nome || ''
+    }
+    const { imprimeWorkbook } = await import('../data/book-print.js')
+    imprimeWorkbook({ ...respostas }, nomeAluno.value)
+  } finally {
+    gerandoPdf.value = false
   }
-  imprimeWorkbook({ ...respostas }, nomeAluno.value)
 }
 
 function abrir(id) {
@@ -153,8 +159,8 @@ function linhasDe(b) {
         Preencha as lacunas durante a aula. Seu progresso é salvo automaticamente —
         pode fechar e voltar de onde parou.
       </p>
-      <button class="btn ghost baixar" @click="baixarPdf">
-        <Download :size="16" /> Baixar meu workbook em PDF
+      <button class="btn ghost baixar" @click="baixarPdf" :disabled="gerandoPdf">
+        <Download :size="16" /> {{ gerandoPdf ? 'Gerando…' : 'Baixar meu workbook em PDF' }}
       </button>
       <ul class="lista">
         <li v-for="s in WORKBOOK" :key="s.id">

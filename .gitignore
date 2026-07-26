@@ -8,3 +8,6 @@ node_modules/
 .env.local
 # Edge Functions locais contêm chaves de API (ex.: SendFlow) — NÃO versionar
 supabase/
+
+# PDF-livro (apostila) é artefato gerado, não faz parte do site servido
+dist-book/

@@ -7,6 +7,7 @@ import EsqueciSenha from './views/EsqueciSenha.vue'
 import RedefinirSenha from './views/RedefinirSenha.vue'
 import Pesquisa from './views/Pesquisa.vue'
 import Ambiente from './views/Ambiente.vue'
+import Workbook from './views/Workbook.vue'
 import Anotacoes from './views/Anotacoes.vue'
 import Resultados from './views/Resultados.vue'
 
@@ -24,6 +25,7 @@ const routes = [
   // Lead novo responde aqui e ganha o acesso ao final. Aluno logado sem
   // pesquisa também cai aqui pelo gate (requiresSurvey).
   { path: '/pesquisa', name: 'pesquisa', component: Pesquisa },
+  { path: '/workbook', name: 'workbook', component: Workbook, meta: { requiresAuth: true, requiresSurvey: true } },
   { path: '/minhas-anotacoes', name: 'anotacoes', component: Anotacoes, meta: { requiresAuth: true } },
   { path: '/resultado-das-pesquisas', name: 'resultados', component: Resultados, meta: { requiresAuth: true, admin: true } },
   { path: '/:pathMatch(.*)*', redirect: '/login' },

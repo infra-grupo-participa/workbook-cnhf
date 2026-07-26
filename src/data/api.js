@@ -377,6 +377,47 @@ export async function removerAnotacao(id) {
 }
 
 // ============================================================
+// WORKBOOK / APOSTILA — preenchimento das lacunas por aluno
+// ------------------------------------------------------------
+// Uma linha por aluno em workbook.workbook_respostas; `respostas` é um
+// jsonb chaveado pelo id da lacuna (ex.: { "cap-1-l1": "texto" }).
+// Autosave: cada save é um upsert por user_id (respeita a RLS dono).
+// ============================================================
+/** carrega as respostas do workbook do aluno logado → { respostas, progresso } */
+export async function getWorkbook() {
+  const uid = currentUserId()
+  if (!uid) return { respostas: {}, progresso: {} }
+  const { data, error } = await supabase
+    .from('workbook_respostas')
+    .select('respostas, progresso')
+    .eq('user_id', uid)
+    .maybeSingle()
+  if (error || !data) return { respostas: {}, progresso: {} }
+  return { respostas: data.respostas || {}, progresso: data.progresso || {} }
+}
+
+/**
+ * salva o mapa completo de respostas do workbook (upsert por user_id).
+ * `progresso` guarda métricas leves (preenchidas, ultima_secao) p/ o "continuar
+ * de onde parei". Retorna { ok } — o chamador faz debounce (autosave).
+ */
+export async function saveWorkbook(respostas, progresso) {
+  const uid = currentUserId()
+  if (!uid) return { ok: false, code: 'NO_SESSION' }
+  const registro = {
+    user_id: uid,
+    respostas: respostas || {},
+    progresso: progresso || {},
+    atualizado_em: new Date().toISOString(),
+  }
+  const { error } = await supabase
+    .from('workbook_respostas')
+    .upsert(registro, { onConflict: 'user_id' })
+  if (error) return { ok: false, code: 'ERROR', message: error.message }
+  return { ok: true }
+}
+
+// ============================================================
 // ADMIN
 // ============================================================
 export async function isAdmin() {

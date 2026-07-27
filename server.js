@@ -83,7 +83,17 @@ app.use((req, res, next) => {
 
 // Healthcheck — responde SEMPRE, independente do dist/.
 app.get('/health', (_req, res) =>
-  res.json({ ok: true, service: 'workbook-cnhf', distOk: !!resolveDist(), building })
+  res.json({
+    ok: true,
+    service: 'workbook-cnhf',
+    distOk: !!resolveDist(),
+    building,
+    // diagnóstico de configuração — BOOLEANO, nunca o valor da chave.
+    // srvKey:false => /api/recuperar-acesso responde 503. Causas usuais:
+    // env não salva, nome diferente, ou app não reiniciado após salvar.
+    srvKey: !!process.env.SUPABASE_SERVICE_ROLE_KEY,
+    srvKeyLen: (process.env.SUPABASE_SERVICE_ROLE_KEY || '').length,
+  })
 )
 
 // ============================================================

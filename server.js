@@ -16,7 +16,7 @@
    ============================================================ */
 
 import express from 'express'
-import { fileURLToPath, pathToFileURL } from 'node:url'
+import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
 import { existsSync } from 'node:fs'
 import { spawn } from 'node:child_process'
@@ -27,11 +27,19 @@ const __dirname = dirname(fileURLToPath(import.meta.url))
 const PORT = process.env.PORT || 3000
 const HOST = process.env.HOST || '0.0.0.0'
 
-// executado direto (npm start) ou importado por um teste? Quando importado,
-// NÃO sobe o listener nem dispara build — só exporta app e utilitários.
-const EH_MAIN = (() => {
-  try { return import.meta.url === pathToFileURL(process.argv[1]).href } catch { return true }
-})()
+/*
+  Subir o servidor é o comportamento PADRÃO. Testes que só querem importar o
+  `app` e as funções puras setam WORKBOOK_NO_LISTEN=1.
+
+  Antes isto era uma heurística (`import.meta.url === process.argv[1]`) e ela
+  DERRUBOU A PRODUÇÃO: a Hostinger não roda `node server.js` direto — carrega o
+  app por um wrapper (Passenger), então argv[1] não bate, o listen nunca era
+  chamado e o proxy devolvia 503 em tudo, inclusive no /health.
+
+  A regra: em caso de dúvida, ESCUTAR. Um teste que sobe um listener à toa é um
+  aborrecimento; um servidor que não sobe é uma queda.
+*/
+const EH_MAIN = process.env.WORKBOOK_NO_LISTEN !== '1'
 
 // Resolve o dist/ dinamicamente: o cwd do runtime pode diferir do dir do
 // server.js. Retorna o 1º candidato que tenha index.html, ou null.

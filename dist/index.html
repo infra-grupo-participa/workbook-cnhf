@@ -4,13 +4,29 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <link rel="icon" type="image/svg+xml" href="./favicon.svg" />
+    <link rel="manifest" href="./manifest.webmanifest" />
+    <link rel="apple-touch-icon" href="./logo-cnhf.png" />
+    <meta name="theme-color" content="#ff6b00" />
     <title>Workbook · Curso Nacional de Formação em Holding Familiar</title>
-    <script type="module" crossorigin src="./assets/index-CkRs9Tmb.js"></script>
-    <link rel="modulepreload" crossorigin href="./assets/vue-D0qT1qRW.js">
+    <script type="module" crossorigin src="./assets/index-BMeI4wqL.js"></script>
+    <link rel="modulepreload" crossorigin href="./assets/vue-DquS3Yk-.js">
     <link rel="modulepreload" crossorigin href="./assets/supabase-kPbh7bwL.js">
-    <link rel="stylesheet" crossorigin href="./assets/index-CJi2z_MZ.css">
+    <link rel="stylesheet" crossorigin href="./assets/index-FabIFoNQ.css">
   </head>
   <body>
-    <div id="app"></div>
+    <div id="app"></div>
+    <script>
+      // Service worker só em produção (https fora de localhost): em dev o
+      // Vite serve módulos sem hash e o cache atrapalharia o HMR.
+      if (
+        'serviceWorker' in navigator &&
+        location.protocol === 'https:' &&
+        !['localhost', '127.0.0.1'].includes(location.hostname)
+      ) {
+        window.addEventListener('load', function () {
+          navigator.serviceWorker.register('./sw.js').catch(function () {})
+        })
+      }
+    </script>
   </body>
 </html>

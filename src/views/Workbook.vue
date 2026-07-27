@@ -1,310 +1,564 @@
 <script setup>
-import { ref, computed, reactive, onMounted, onBeforeUnmount, nextTick } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
-import LogoCNHF from '../components/LogoCNHF.vue'
-import ArrowLeft from '@lucide/vue/dist/esm/icons/arrow-left.mjs'
-import Check from '@lucide/vue/dist/esm/icons/check.mjs'
 import Download from '@lucide/vue/dist/esm/icons/download.mjs'
-import { currentUser, getWorkbook, saveWorkbook, getLead } from '../data/api.js'
+import { currentUser, getLead } from '../data/api.js'
+import { store } from '../data/store.js'
 import { WORKBOOK, ANCORA } from '../data/workbook-content.js'
-// book-print (gera o HTML/CSS do PDF) só é necessário ao baixar → import dinâmico
+import { prefs } from '../components/livro/usePreferencias.js'
+import { criarDitado } from '../components/livro/useDitado.js'
+import CabecalhoCorrente from '../components/livro/CabecalhoCorrente.vue'
+import AberturaCapitulo from '../components/livro/AberturaCapitulo.vue'
+import LacunaInline from '../components/livro/LacunaInline.vue'
+import LacunaBloco from '../components/livro/LacunaBloco.vue'
+import CitacaoLegal from '../components/livro/CitacaoLegal.vue'
+import MapaLacunas from '../components/livro/MapaLacunas.vue'
+import BarraLacunas from '../components/livro/BarraLacunas.vue'
+// book-print (HTML/CSS do PDF) só ao baixar → import dinâmico
 
 const router = useRouter()
 
-// --- estado ---
-const carregando = ref(true)
-const respostas = reactive({})          // { "cap-1-l1": "texto" }
-const secaoAtiva = ref(null)            // id da seção aberta; null = índice
-const salvando = ref(false)
-const salvoEm = ref(null)
-
-// total de lacunas p/ progresso
-const totalLacunas = WORKBOOK.reduce((a, s) => a + s.total_lacunas, 0)
-const preenchidas = computed(() =>
-  Object.values(respostas).filter((v) => (v || '').trim().length > 0).length
-)
-const pct = computed(() => totalLacunas ? Math.round((preenchidas.value / totalLacunas) * 100) : 0)
-
-// preenchidas por seção (p/ o índice)
-function preenchidasNaSecao(sec) {
-  let n = 0
-  for (const b of sec.blocos) {
-    if (b.tipo === 'lacuna' || b.tipo === 'citacao-legal') {
-      if ((respostas[b.id] || '').trim().length > 0) n++
+// ------------------------------------------------------------
+// metadados das lacunas (ordem de leitura por seção)
+// ------------------------------------------------------------
+function rotulo(sec) {
+  return sec.tipo === 'capitulo' ? `Capítulo ${sec.romano}` : `Seção Extra ${sec.numero}`
+}
+function idsDaSecao(sec) {
+  const ids = []
+  for (const p of sec.paragrafos) {
+    if (p.tipo === 'paragrafo') {
+      for (const b of p.blocos) if (b.tipo === 'lacuna') ids.push(b.id)
+    } else if (p.tipo === 'citacao-legal') {
+      ids.push(p.id)
     }
   }
-  return n
+  return ids
 }
+const IDS_POR_SECAO = Object.fromEntries(WORKBOOK.map((s) => [s.id, idsDaSecao(s)]))
+const META = {}
+for (const sec of WORKBOOK) {
+  const ids = IDS_POR_SECAO[sec.id]
+  ids.forEach((id, i) => {
+    META[id] = { n: i + 1, total: ids.length, rotulo: rotulo(sec), secao: sec.id }
+  })
+}
+const TOTAL_LACUNAS = WORKBOOK.reduce((a, s) => a + s.total_lacunas, 0)
+
+// ------------------------------------------------------------
+// estado
+// ------------------------------------------------------------
+const carregando = ref(true)
+const secaoAtiva = ref(null)          // id da seção aberta; null = sumário
+const lacunaAtiva = ref(null)         // id da lacuna focada agora
+const ultimaLacuna = ref(null)        // última focada (alvo do ditado)
+const corpoEl = ref(null)
+const aberturaEl = ref(null)
 
 const secao = computed(() => WORKBOOK.find((s) => s.id === secaoAtiva.value) || null)
 const idxAtiva = computed(() => WORKBOOK.findIndex((s) => s.id === secaoAtiva.value))
+const secAnterior = computed(() => (idxAtiva.value > 0 ? WORKBOOK[idxAtiva.value - 1] : null))
+const secProxima = computed(() =>
+  idxAtiva.value >= 0 && idxAtiva.value < WORKBOOK.length - 1 ? WORKBOOK[idxAtiva.value + 1] : null)
 
-function rotulo(sec) {
-  return sec.tipo === 'capitulo' ? `Capítulo ${sec.numero}` : `Seção Extra ${sec.numero}`
+function preenchidasNaSecao(sec) {
+  return IDS_POR_SECAO[sec.id].filter((id) => (store.valores[id] || '').trim().length > 0).length
 }
+const pct = computed(() =>
+  TOTAL_LACUNAS ? Math.round((store.progresso.preenchidas / TOTAL_LACUNAS) * 100) : 0)
 
-// --- carga inicial ---
+const itensMapa = computed(() => {
+  if (!secao.value) return []
+  return IDS_POR_SECAO[secao.value.id].map((id, i) => ({
+    id, n: i + 1, cheia: (store.valores[id] || '').trim().length > 0,
+  }))
+})
+
+// ------------------------------------------------------------
+// carga inicial — store local-first (Agente C): grava cada tecla no
+// IndexedDB na hora e sincroniza com merge por campo em segundo plano.
+// ------------------------------------------------------------
 onMounted(async () => {
-  const wb = await getWorkbook()
-  Object.assign(respostas, wb.respostas || {})
-  // retoma na última seção mexida, se houver
-  if (wb.progresso && wb.progresso.ultima_secao && WORKBOOK.some(s => s.id === wb.progresso.ultima_secao)) {
-    secaoAtiva.value = wb.progresso.ultima_secao
+  await store.init()
+  // retoma de onde parou (a menos que tenha vindo pedindo o sumário)
+  const querSumario = router.currentRoute.value.query.ir === 'sumario'
+  const ultima = store.progresso.ultima_secao
+  if (!querSumario && ultima && WORKBOOK.some((s) => s.id === ultima)) {
+    secaoAtiva.value = ultima
   }
   carregando.value = false
 })
+onBeforeUnmount(() => { store.flush() })   // troca de rota: força sync agora
 
-// --- autosave (debounce) ---
-let timer = null
-let pendente = false
-function agendarSave() {
-  pendente = true
-  clearTimeout(timer)
-  timer = setTimeout(persistir, 900)
+// ------------------------------------------------------------
+// navegação de seção
+// ------------------------------------------------------------
+function abrir(id) {
+  secaoAtiva.value = id
+  store.progresso.ultima_secao = id
+  lacunaAtiva.value = null
+  ultimaLacuna.value = null
+  nextTick(() => {
+    window.scrollTo({ top: 0, behavior: 'auto' })
+    if (aberturaEl.value) aberturaEl.value.focarTitulo()
+  })
 }
-async function persistir() {
-  if (!pendente) return
-  pendente = false
-  salvando.value = true
-  const progresso = { preenchidas: preenchidas.value, ultima_secao: secaoAtiva.value }
-  const r = await saveWorkbook({ ...respostas }, progresso)
-  salvando.value = false
-  if (r.ok) salvoEm.value = new Date()
+function voltarSumario() {
+  secaoAtiva.value = null
+  nextTick(() => window.scrollTo({ top: 0, behavior: 'auto' }))
 }
-// salva ao sair da página / trocar de aba
-function flush() { if (pendente) persistir() }
-onBeforeUnmount(() => { clearTimeout(timer); flush() })
-if (typeof window !== 'undefined') {
-  window.addEventListener('beforeunload', flush)
-  onBeforeUnmount(() => window.removeEventListener('beforeunload', flush))
+function voltarHeader() {
+  if (secao.value) voltarSumario()
+  else router.push({ name: 'ambiente' })
 }
 
-function onInput(id, val) {
-  respostas[id] = val
-  agendarSave()
+// ------------------------------------------------------------
+// navegação por lacuna (teclado / barra / mapa)
+// ------------------------------------------------------------
+function movReduzido() {
+  return typeof matchMedia !== 'undefined' &&
+    matchMedia('(prefers-reduced-motion: reduce)').matches
+}
+function lacunasDom() {
+  return corpoEl.value ? Array.from(corpoEl.value.querySelectorAll('[data-lacuna]')) : []
+}
+/* leva a lacuna pro terço superior da tela — nunca pro topo cru, nunca
+   atrás do cabeçalho sticky, nunca sob o teclado virtual (usa o
+   visualViewport quando existe) */
+function posicionar(el, forcar = false) {
+  const vv = window.visualViewport
+  const alturaUtil = vv ? vv.height : window.innerHeight
+  const r = el.getBoundingClientRect()
+  const alvo = Math.max(64, alturaUtil * 0.3)
+  const confortavel = r.top >= 64 && r.bottom <= alturaUtil * 0.72
+  if (!forcar && confortavel) return
+  window.scrollBy({ top: r.top - alvo, behavior: movReduzido() ? 'auto' : 'smooth' })
+}
+function focarLacuna(el) {
+  el.focus({ preventScroll: true })
+  posicionar(el, true)
+}
+function irParaLacuna(id) {
+  const el = lacunasDom().find((e) => e.dataset.lacuna === id)
+  if (el) focarLacuna(el)
+}
+/** move o foco entre lacunas; devolve true se moveu (false no limite —
+ *  aí o Tab nativo segue em frente e ninguém fica preso no grupo) */
+function saltar(delta) {
+  const els = lacunasDom()
+  if (!els.length) return false
+  const atualId = document.activeElement && document.activeElement.dataset
+    ? document.activeElement.dataset.lacuna : null
+  let i = els.findIndex((e) => e.dataset.lacuna === atualId)
+  if (i === -1) {
+    // nada focado: a partir do que está visível
+    const primeiroVisivel = els.findIndex((e) => e.getBoundingClientRect().top > 64)
+    i = delta > 0
+      ? (primeiroVisivel === -1 ? els.length - 1 : primeiroVisivel)
+      : (primeiroVisivel === -1 ? els.length - 1 : Math.max(0, primeiroVisivel - 1))
+    focarLacuna(els[i])
+    return true
+  }
+  const prox = Math.min(els.length - 1, Math.max(0, i + delta))
+  if (prox === i) return false
+  focarLacuna(els[prox])
+  return true
+}
+function onKeydownCorpo(e) {
+  const t = e.target
+  if (!t || !t.dataset || !t.dataset.lacuna) return
+  if (e.key === 'Tab') {
+    if (saltar(e.shiftKey ? -1 : 1)) e.preventDefault()
+    // no limite: Tab nativo sai do grupo (nunca vira armadilha de teclado)
+  } else if (e.key === 'Enter' && t.tagName === 'INPUT') {
+    e.preventDefault(); saltar(1)
+  } else if (e.key === 'Escape') {
+    t.blur()   // sai pro modo leitura
+  }
+}
+function onFocusinCorpo(e) {
+  const id = e.target && e.target.dataset ? e.target.dataset.lacuna : null
+  if (!id) return
+  lacunaAtiva.value = id
+  ultimaLacuna.value = id
+  posicionar(e.target)
+}
+function onFocusoutCorpo(e) {
+  const rel = e.relatedTarget
+  if (!rel || !rel.dataset || !rel.dataset.lacuna) lacunaAtiva.value = null
 }
 
-// auto-resize de textarea
-function autoGrow(e) {
-  const el = e.target
-  el.style.height = 'auto'
-  el.style.height = el.scrollHeight + 'px'
+// ------------------------------------------------------------
+// ditado por voz (progressive enhancement — só Chrome/Edge)
+// ------------------------------------------------------------
+const ditado = criarDitado({
+  aoTexto(txt) {
+    const id = ultimaLacuna.value
+    if (!id) return
+    const atual = store.get(id)
+    store.set(id, atual ? atual.replace(/\s+$/, '') + ' ' + txt : txt)
+  },
+})
+function alternarVoz() {
+  ditado.alternar()
+  if (ultimaLacuna.value) irParaLacuna(ultimaLacuna.value)
 }
 
-// baixar "meu workbook preenchido" em PDF (via janela de impressão do navegador)
+// ------------------------------------------------------------
+// PDF do aluno (Agente D) — recebe strings puras
+// ------------------------------------------------------------
 const nomeAluno = ref('')
 const gerandoPdf = ref(false)
 async function baixarPdf() {
-  flush()
   gerandoPdf.value = true
   try {
+    await store.flush()
     if (!nomeAluno.value) {
-      const l = await getLead(currentUser()); nomeAluno.value = l?.nome || ''
+      const l = await getLead(currentUser()); nomeAluno.value = (l && l.nome) || ''
     }
     const { imprimeWorkbook } = await import('../data/book-print.js')
-    imprimeWorkbook({ ...respostas }, nomeAluno.value)
+    imprimeWorkbook({ ...store.valores }, nomeAluno.value)
   } finally {
     gerandoPdf.value = false
   }
 }
 
-function abrir(id) {
-  secaoAtiva.value = id
-  agendarSave()
-  nextTick(() => window.scrollTo({ top: 0, behavior: 'smooth' }))
-}
-function voltarIndice() { flush(); secaoAtiva.value = null; window.scrollTo({ top: 0 }) }
-function irPara(delta) {
-  const i = idxAtiva.value + delta
-  if (i >= 0 && i < WORKBOOK.length) abrir(WORKBOOK[i].id)
-}
-
-// nº de linhas de um bloco (altura)
-function linhasDe(b) {
-  if (b.linhas && b.linhas > 0) return b.linhas
-  return b.tamanho === 'paragrafo' ? 4 : b.tamanho === 'curto' ? 2 : 1
+// capitular só quando o capítulo abre em prosa
+function temCapitular(p, i) {
+  return i === 0 && p.tipo === 'paragrafo' && p.blocos[0] && p.blocos[0].tipo === 'prosa'
 }
 </script>
 
 <template>
-  <div class="shell">
-    <header class="top card">
-      <LogoCNHF :height="32" />
-      <div class="acts">
-        <span class="save" v-if="salvando">salvando…</span>
-        <span class="save ok" v-else-if="salvoEm"><Check :size="14" :stroke-width="3" /> salvo</span>
-        <button class="btn ghost" @click="router.push({ name: 'ambiente' })">Voltar ao ambiente</button>
+  <div class="livro" lang="pt-BR">
+    <CabecalhoCorrente
+      :modo="secao ? 'leitura' : 'indice'"
+      :rotulo="secao ? rotulo(secao) : 'Workbook · Holding Familiar'"
+      :titulo="secao ? secao.titulo : ''"
+      :pct="pct"
+      :status="store.status.value"
+      :pendentes="store.pendentes.value"
+      :ultima-sync="store.ultimaSync.value"
+      @voltar="voltarHeader" />
+
+    <!-- carregando: esqueleto de página, não spinner -->
+    <main v-if="carregando" class="pagina" aria-busy="true" aria-label="Carregando seu workbook">
+      <div class="sk sk-num"></div>
+      <div class="sk sk-tit"></div>
+      <div class="sk" v-for="n in 7" :key="n" :style="{ width: (100 - n * 4) + '%' }"></div>
+    </main>
+
+    <!-- SUMÁRIO -->
+    <main v-else-if="!secao" class="pagina">
+      <header class="frontis">
+        <p class="fr-kicker">Curso Nacional de Formação em Holding Familiar</p>
+        <h1 class="fr-titulo">Workbook</h1>
+        <p class="fr-sub">
+          Caderno de acompanhamento das aulas. Preencha as lacunas enquanto o
+          professor dita — cada tecla fica salva neste aparelho e sincroniza
+          sozinha quando há rede.
+        </p>
+      </header>
+
+      <nav aria-label="Sumário">
+        <h2 class="sum-h">Sumário</h2>
+        <ol class="sum">
+          <li v-for="s in WORKBOOK" :key="s.id">
+            <button class="sum-item" @click="abrir(s.id)">
+              <span class="sum-num">{{ s.tipo === 'capitulo' ? s.romano : '§' + s.numero }}</span>
+              <span class="sum-tit">{{ s.titulo }}</span>
+              <span class="sum-leader" aria-hidden="true"></span>
+              <span class="sum-prog" :class="{ completa: preenchidasNaSecao(s) === s.total_lacunas }">
+                {{ preenchidasNaSecao(s) }}/{{ s.total_lacunas }}
+              </span>
+            </button>
+          </li>
+        </ol>
+      </nav>
+
+      <div class="sum-acoes">
+        <button class="btn-livro" @click="baixarPdf" :disabled="gerandoPdf">
+          <Download :size="15" aria-hidden="true" />
+          {{ gerandoPdf ? 'Gerando…' : 'Baixar meu workbook em PDF' }}
+        </button>
       </div>
-    </header>
+    </main>
 
-    <!-- barra de progresso global -->
-    <section class="card prog">
-      <div class="prog-top">
-        <div>
-          <div class="eyebrow">Workbook · Holding Familiar</div>
-          <strong>{{ preenchidas }} de {{ totalLacunas }} campos preenchidos</strong>
-        </div>
-        <div class="pct">{{ pct }}%</div>
-      </div>
-      <div class="bar"><div class="fill" :style="{ width: pct + '%' }" /></div>
-    </section>
+    <!-- LEITURA de um capítulo -->
+    <main v-else class="pagina leitura">
+      <AberturaCapitulo ref="aberturaEl" :secao="secao" :preenchidas="preenchidasNaSecao(secao)" />
 
-    <div v-if="carregando" class="card vazio">Carregando seu workbook…</div>
+      <div
+        ref="corpoEl"
+        class="corpo"
+        :class="{ justif: prefs.justificar }"
+        @keydown.capture="onKeydownCorpo"
+        @focusin="onFocusinCorpo"
+        @focusout="onFocusoutCorpo">
+        <template v-for="(p, i) in secao.paragrafos" :key="secao.id + '-' + i">
+          <p v-if="p.tipo === 'paragrafo'" class="par" :class="{ 'par-cap': temCapitular(p, i) }">
+            <template v-for="(b, j) in p.blocos" :key="j">
+              <template v-if="b.tipo === 'prosa'"><span class="prosa">{{ b.texto }}</span>{{ ' ' }}</template>
+              <template v-else-if="b.tipo === 'lacuna' && b.tamanho === 'linha'"><LacunaInline
+                  v-model="store.valores[b.id]" :bloco="b" :meta="META[b.id]" /><span
+                  v-if="b.sufixo" class="suf">{{ b.sufixo }}</span>{{ ' ' }}</template>
+              <template v-else-if="b.tipo === 'lacuna'"><LacunaBloco
+                  v-model="store.valores[b.id]" :bloco="b" :meta="META[b.id]"
+                  :sufixo="b.sufixo || ''" />{{ ' ' }}</template>
+            </template>
+          </p>
 
-    <!-- ÍNDICE de capítulos -->
-    <section v-else-if="!secao" class="card indice">
-      <div class="eyebrow">Sumário</div>
-      <h2>Caderno de acompanhamento</h2>
-      <p class="muted intro">
-        Preencha as lacunas durante a aula. Seu progresso é salvo automaticamente —
-        pode fechar e voltar de onde parou.
-      </p>
-      <button class="btn ghost baixar" @click="baixarPdf" :disabled="gerandoPdf">
-        <Download :size="16" /> {{ gerandoPdf ? 'Gerando…' : 'Baixar meu workbook em PDF' }}
-      </button>
-      <ul class="lista">
-        <li v-for="s in WORKBOOK" :key="s.id">
-          <button class="item" @click="abrir(s.id)">
-            <span class="item-num">{{ rotulo(s) }}</span>
-            <span class="item-tit">{{ s.titulo }}</span>
-            <span class="item-badge" :class="{ full: preenchidasNaSecao(s) === s.total_lacunas && s.total_lacunas > 0 }">
-              {{ preenchidasNaSecao(s) }}/{{ s.total_lacunas }}
-            </span>
-          </button>
-        </li>
-      </ul>
-    </section>
+          <h2 v-else-if="p.tipo === 'subtitulo'" class="subtitulo">{{ p.texto }}</h2>
 
-    <!-- LEITOR de uma seção -->
-    <section v-else class="card leitor">
-      <button class="link voltar" @click="voltarIndice"><ArrowLeft :size="16" /> Sumário</button>
-      <div class="cap-kicker">{{ rotulo(secao) }}</div>
-      <h1 class="cap-titulo">{{ secao.titulo }}</h1>
-
-      <div class="corpo">
-        <template v-for="(b, i) in secao.blocos" :key="i">
-          <span v-if="b.tipo === 'prosa'" class="prosa">{{ b.texto }} </span>
-
-          <h3 v-else-if="b.tipo === 'subtitulo'" class="subtitulo">{{ b.texto }}</h3>
-
-          <!-- lacuna inline curta -->
-          <template v-else-if="b.tipo === 'lacuna' && b.tamanho === 'linha'">
-            <input
-              class="gap-inline"
-              :value="respostas[b.id] || ''"
-              @input="onInput(b.id, $event.target.value)"
-              type="text" spellcheck="false" />
-            <span v-if="b.sufixo" class="suf">{{ b.sufixo }} </span>
-          </template>
-
-          <!-- lacuna bloco (várias linhas) -->
-          <div v-else-if="b.tipo === 'lacuna'" class="gap-block">
-            <textarea
-              :value="respostas[b.id] || ''"
-              @input="onInput(b.id, $event.target.value); autoGrow($event)"
-              :rows="linhasDe(b)"
-              spellcheck="false"
-              placeholder="…" />
-            <span v-if="b.sufixo" class="suf">{{ b.sufixo }} </span>
-          </div>
-
-          <!-- citação legal -->
-          <div v-else-if="b.tipo === 'citacao-legal'" class="legal">
-            <span class="legal-rotulo">{{ b.rotulo }}</span>
-            <textarea
-              :value="respostas[b.id] || ''"
-              @input="onInput(b.id, $event.target.value); autoGrow($event)"
-              :rows="Math.max(2, linhasDe(b))"
-              spellcheck="false"
-              placeholder="Anote aqui a referência ditada…" />
-            <span v-if="b.sufixo" class="suf">{{ b.sufixo }}</span>
-          </div>
+          <CitacaoLegal
+            v-else-if="p.tipo === 'citacao-legal'"
+            v-model="store.valores[p.id]"
+            :bloco="p"
+            :meta="META[p.id]" />
         </template>
       </div>
 
-      <p v-if="secao.ancora" class="ancora">{{ ANCORA }}</p>
+      <footer class="fim">
+        <div class="fleuron" aria-hidden="true">❦</div>
+        <p v-if="secao.ancora" class="ancora">{{ ANCORA }}</p>
+        <nav class="fim-nav" aria-label="Navegação entre capítulos">
+          <button v-if="secAnterior" class="fim-ir ant" @click="abrir(secAnterior.id)">
+            <span class="fim-rot">‹ {{ rotulo(secAnterior) }}</span>
+            <span class="fim-tit">{{ secAnterior.titulo }}</span>
+          </button>
+          <span v-else></span>
+          <button v-if="secProxima" class="fim-ir prox" @click="abrir(secProxima.id)">
+            <span class="fim-rot">{{ rotulo(secProxima) }} ›</span>
+            <span class="fim-tit">{{ secProxima.titulo }}</span>
+          </button>
+          <button v-else class="fim-ir prox" @click="voltarSumario">
+            <span class="fim-rot">Fim do workbook</span>
+            <span class="fim-tit">Voltar ao sumário</span>
+          </button>
+        </nav>
+      </footer>
+    </main>
 
-      <nav class="nav">
-        <button class="btn" :disabled="idxAtiva === 0" @click="irPara(-1)">← Anterior</button>
-        <button class="btn ghost" @click="voltarIndice">Sumário</button>
-        <button class="btn primary" :disabled="idxAtiva === WORKBOOK.length - 1" @click="irPara(1)">Próximo →</button>
-      </nav>
-    </section>
+    <MapaLacunas
+      v-if="secao && !carregando"
+      :itens="itensMapa"
+      :ativa="lacunaAtiva"
+      :preenchidas="secao ? preenchidasNaSecao(secao) : 0"
+      @ir="irParaLacuna" />
+
+    <BarraLacunas
+      v-if="secao && !carregando"
+      :atual="lacunaAtiva && META[lacunaAtiva] ? META[lacunaAtiva].n : null"
+      :total="secao.total_lacunas"
+      :preenchidas="preenchidasNaSecao(secao)"
+      :voz-suportada="ditado.suportado"
+      :gravando="ditado.gravando.value"
+      @anterior="saltar(-1)"
+      @proxima="saltar(1)"
+      @voz="alternarVoz" />
   </div>
 </template>
 
 <style scoped>
-.shell { position: relative; z-index: 1; max-width: 820px; margin: 0 auto; padding: 18px 18px 70px; display: flex; flex-direction: column; gap: 16px; }
-.top { display: flex; align-items: center; justify-content: space-between; padding: 12px 18px; }
-.acts { display: flex; align-items: center; gap: 10px; }
-.save { font-size: 12.5px; color: var(--ink-3); display: inline-flex; align-items: center; gap: 5px; }
-.save.ok { color: var(--ok); }
+/* ============ a página é o papel — sem cartões ============ */
+.livro {
+  position: relative;
+  z-index: 1;
+  min-height: 100vh;
+  background: var(--papel);
+  color: var(--tinta);
+}
+.pagina {
+  max-width: 66ch;
+  margin: 0 auto;
+  padding: 0 clamp(18px, 4vw, 32px) 120px;
+  font-family: var(--fonte-corpo);
+  font-size: var(--fs-livro);
+  line-height: var(--lh-livro);
+}
 
-/* progresso */
-.prog { padding: 16px 20px; }
-.prog-top { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; }
-.prog-top strong { display: block; font-size: 15px; margin-top: 3px; }
-.pct { font-size: 22px; font-weight: 800; color: var(--accent); }
-.bar { height: 8px; border-radius: 999px; background: var(--stroke); overflow: hidden; }
-.fill { height: 100%; background: var(--accent); border-radius: 999px; transition: width .3s ease; }
+/* esqueleto de carga */
+.sk {
+  height: 0.9em;
+  margin: 1.1em 0;
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--tinta) 8%, transparent);
+  animation: sk-respira 1.4s ease-in-out infinite;
+}
+.sk-num { width: 90px; height: 84px; margin-top: 72px; }
+.sk-tit { width: 60%; height: 1.8em; }
+@keyframes sk-respira { 50% { opacity: 0.45; } }
 
-.vazio { padding: 40px; text-align: center; color: var(--ink-2); }
+/* ============ frontispício + sumário ============ */
+.frontis { padding: clamp(44px, 10vh, 96px) 0 12px; }
+.fr-kicker {
+  margin: 0;
+  font-family: var(--fonte-ui);
+  font-size: 11.5px;
+  font-weight: 700;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--resposta);
+}
+.fr-titulo {
+  margin: 10px 0 0;
+  font-family: var(--fonte-livro);
+  font-weight: 700;
+  font-size: clamp(40px, 8vw, 58px);
+  line-height: 1.05;
+  letter-spacing: -0.015em;
+}
+.fr-sub {
+  margin: 16px 0 0;
+  max-width: 46ch;
+  font-size: 0.92em;
+  color: var(--tinta-2);
+}
+.sum-h {
+  margin: 44px 0 10px;
+  font-family: var(--fonte-ui);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--tinta-2);
+}
+.sum { list-style: none; margin: 0; padding: 0; }
+.sum-item {
+  width: 100%;
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  padding: 13px 4px;
+  background: none;
+  border: none;
+  border-bottom: 1px solid color-mix(in srgb, var(--pauta) 28%, transparent);
+  font-family: var(--fonte-livro);
+  font-size: 0.96em;
+  color: var(--tinta);
+  text-align: left;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+.sum-item:hover { background: var(--resposta-bg); }
+.sum-num {
+  flex: 0 0 44px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  color: var(--resposta);
+}
+.sum-tit { flex-shrink: 1; line-height: 1.35; }
+.sum-leader {
+  flex: 1;
+  min-width: 24px;
+  border-bottom: 1px dotted var(--pauta-suave);
+  transform: translateY(-0.28em);
+}
+.sum-prog {
+  font-family: var(--fonte-ui);
+  font-size: 12px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  color: var(--tinta-2);
+}
+.sum-prog.completa { color: var(--ok); }
+.sum-acoes { margin-top: 30px; }
+.btn-livro {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-family: var(--fonte-ui);
+  font-size: 13.5px;
+  font-weight: 600;
+  color: var(--tinta);
+  background: transparent;
+  border: 1px solid var(--pauta);
+  border-radius: 10px;
+  padding: 11px 18px;
+  min-height: 44px;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s;
+}
+.btn-livro:hover { background: var(--resposta-bg); }
+.btn-livro:disabled { opacity: 0.55; cursor: wait; }
 
-/* índice */
-.indice { padding: 24px 26px; }
-.indice h2 { font-size: 22px; margin: 6px 0 8px; }
-.intro { font-size: 14px; margin: 0 0 14px; max-width: 560px; }
-.baixar { margin-bottom: 18px; }
-.lista { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
-.item { width: 100%; display: flex; align-items: center; gap: 14px; padding: 14px 16px; text-align: left;
-  background: var(--surface); border: 1px solid var(--stroke); border-radius: var(--radius-sm); cursor: pointer;
-  transition: border-color .15s, transform .1s; }
-.item:hover { border-color: var(--accent-line); }
-.item:active { transform: scale(.995); }
-.item-num { flex: 0 0 auto; min-width: 96px; font-size: 11px; font-weight: 800; letter-spacing: .04em;
-  text-transform: uppercase; color: var(--accent); }
-.item-tit { flex: 1; font-size: 14.5px; font-weight: 600; color: var(--ink); line-height: 1.35; }
-.item-badge { flex: 0 0 auto; font-size: 12px; font-weight: 700; color: var(--ink-3);
-  background: var(--bg); border: 1px solid var(--stroke); border-radius: 999px; padding: 3px 10px; }
-.item-badge.full { color: var(--ok); border-color: rgba(47,191,113,.4); background: rgba(47,191,113,.10); }
+/* ============ corpo do capítulo ============ */
+.corpo { text-align: left; }
+.corpo.justif { text-align: justify; hyphens: auto; -webkit-hyphens: auto; }
+.par { margin: 0 0 1.15em; }
+/* recuo clássico de livro a partir do 2º parágrafo */
+.par + .par { text-indent: 1.6em; margin-top: -0.35em; }
+/* capitular no primeiro parágrafo do capítulo */
+.par-cap::first-letter {
+  font-size: 3.05em;
+  font-weight: 600;
+  float: left;
+  line-height: 0.82;
+  padding: 0.04em 0.09em 0 0;
+  color: var(--tinta);
+}
+.suf { color: var(--tinta); }
 
-/* leitor */
-.leitor { padding: 24px 30px 30px; }
-.voltar { display: inline-flex; align-items: center; gap: 5px; margin-bottom: 16px; }
-.cap-kicker { font-size: 11px; font-weight: 800; letter-spacing: .14em; text-transform: uppercase; color: var(--accent); }
-.cap-titulo { font-size: 25px; line-height: 1.2; margin: 6px 0 20px; padding-bottom: 14px; border-bottom: 2px solid var(--accent-line); }
-.corpo { font-size: 16px; line-height: 2.05; text-align: justify; }
-.prosa { }
-.subtitulo { display: block; font-size: 15px; font-weight: 800; text-transform: uppercase; letter-spacing: .05em;
-  color: var(--accent); margin: 22px 0 10px; text-align: left; }
+.subtitulo {
+  margin: 2em 0 0.8em;
+  font-family: var(--fonte-ui);
+  font-size: 0.78em;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--tinta);
+  text-indent: 0;
+}
 
-/* campos */
-.gap-inline { display: inline; width: auto; min-width: 150px; padding: 1px 8px; margin: 0 2px;
-  font: inherit; font-size: 15.5px; color: var(--accent); font-weight: 600;
-  background: var(--accent-soft); border: none; border-bottom: 1.5px solid var(--accent-line);
-  border-radius: 4px 4px 0 0; }
-.gap-inline:focus { outline: none; background: var(--accent-soft); border-bottom-color: var(--accent); box-shadow: none; }
-.gap-block { display: block; margin: 10px 0; }
-.gap-block textarea, .legal textarea { display: block; width: 100%; font: inherit; font-size: 15.5px;
-  line-height: 1.7; color: var(--accent); font-weight: 500; padding: 10px 12px;
-  background: var(--accent-soft); border: 1px solid var(--accent-line); border-radius: var(--radius-sm);
-  resize: none; overflow: hidden; }
-.gap-block textarea:focus, .legal textarea:focus { outline: none; border-color: var(--accent);
-  box-shadow: 0 0 0 3px var(--accent-soft); }
-.suf { color: var(--ink); }
+/* ============ fim de capítulo ============ */
+.fim { margin-top: 56px; text-align: center; }
+.fleuron { font-size: 20px; color: var(--pauta); }
+.ancora {
+  margin: 18px auto 0;
+  max-width: 34ch;
+  font-family: var(--fonte-livro);
+  font-style: italic;
+  font-size: 1.02em;
+  color: var(--tinta-2);
+}
+.fim-nav {
+  margin-top: 40px;
+  display: flex;
+  justify-content: space-between;
+  gap: 14px;
+  border-top: 1px solid color-mix(in srgb, var(--pauta) 30%, transparent);
+  padding-top: 20px;
+}
+.fim-ir {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  max-width: 46%;
+  background: none;
+  border: none;
+  padding: 10px 8px;
+  min-height: 44px;
+  cursor: pointer;
+  border-radius: 8px;
+  text-align: left;
+  transition: background 0.15s;
+}
+.fim-ir.prox { text-align: right; margin-left: auto; }
+.fim-ir:hover { background: var(--resposta-bg); }
+.fim-rot {
+  font-family: var(--fonte-ui);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--resposta);
+}
+.fim-tit { font-family: var(--fonte-livro); font-size: 0.92em; color: var(--tinta-2); line-height: 1.3; }
 
-.legal { display: block; margin: 14px 0; padding: 12px 14px; background: var(--bg);
-  border-left: 3px solid var(--accent); border-radius: 0 var(--radius-sm) var(--radius-sm) 0; }
-.legal-rotulo { display: block; font-size: 11px; font-weight: 800; letter-spacing: .06em;
-  text-transform: uppercase; color: var(--accent); margin-bottom: 8px; }
-
-.ancora { margin-top: 26px; text-align: center; font-style: italic; font-size: 15px; color: var(--accent); }
-
-.nav { display: flex; gap: 10px; justify-content: space-between; margin-top: 28px;
-  padding-top: 18px; border-top: 1px solid var(--stroke); }
+/* ============ mobile ============ */
 @media (max-width: 560px) {
-  .leitor { padding: 20px 18px 24px; }
-  .corpo { font-size: 15px; }
-  .item-num { min-width: 78px; }
+  .pagina { padding-bottom: 140px; }
+  .corpo.justif { text-align: left; hyphens: none; } /* coluna estreita: ragged sempre */
+  .sum-num { flex-basis: 34px; }
 }
 </style>

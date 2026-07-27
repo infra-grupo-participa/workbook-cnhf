@@ -11,3 +11,6 @@ supabase/
 
 # PDF-livro (apostila) é artefato gerado, não faz parte do site servido
 dist-book/
+
+# scratchpad de trabalho multi-agente (efêmero)
+tmp/

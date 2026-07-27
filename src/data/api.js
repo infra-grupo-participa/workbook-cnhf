@@ -10,8 +10,9 @@
    onAuthStateChange.
    ============================================================ */
 
-import { supabase } from './supabase.js'
+import { supabase, SUPABASE_URL, SUPABASE_ANON } from './supabase.js'
 import { avaliarSaude } from './health.js'
+import { normalizarRespostas, aplicarSaveNoRow } from './store.js'
 
 const norm = (e) => (e || '').trim().toLowerCase()
 
@@ -56,9 +57,44 @@ export function currentUser() {
 export function currentUserId() {
   return _session?.user?.id ?? null
 }
+/**
+ * Purga todo dado local da sessão. Sem isto, as respostas do aluno (IndexedDB) e
+ * as respostas do PostgREST cacheadas pelo service worker — incluindo a base
+ * INTEIRA de leads quando um admin abre /resultado-das-pesquisas — ficam em
+ * disco indefinidamente, legíveis por quem usar a máquina depois.
+ */
+async function purgarDadosLocais() {
+  const tarefas = []
+  if (typeof indexedDB !== 'undefined') {
+    tarefas.push(new Promise((resolve) => {
+      const req = indexedDB.deleteDatabase('workbook-cnhf')
+      req.onsuccess = req.onerror = req.onblocked = () => resolve()
+      setTimeout(resolve, 1500)                     // nunca travar o logout
+    }))
+  }
+  if (typeof caches !== 'undefined') {
+    tarefas.push(
+      caches.keys()
+        .then((ns) => Promise.all(ns.filter((n) => n.startsWith('wbcnhf')).map((n) => caches.delete(n))))
+        .catch(() => {})
+    )
+  }
+  // o SW ativo pode ser de outra versão, com caches que esta página não conhece
+  try { navigator.serviceWorker?.controller?.postMessage({ tipo: 'purgar-sessao' }) } catch { /* sem SW */ }
+  await Promise.all(tarefas).catch(() => {})
+}
+
 export async function logout() {
-  await supabase.auth.signOut()
+  // 1. estado local deslogado ANTES do await de rede: a guarda de rota lê
+  //    currentUser() de forma síncrona e, se ainda houver sessão, devolve o
+  //    aluno para o ambiente em vez de levá-lo ao login.
   setSession(null)
+  // 2. zera o store em memória (singleton de módulo sobrevive à navegação SPA)
+  try { const { store } = await import('./store.js'); store.reset() } catch { /* store pode nem ter sido carregado */ }
+  // 3. encerra a sessão no servidor
+  try { await supabase.auth.signOut() } catch { /* sessão local já foi embora */ }
+  // 4. remove o que ficou em disco
+  await purgarDadosLocais()
 }
 
 // ============================================================
@@ -380,41 +416,121 @@ export async function removerAnotacao(id) {
 // WORKBOOK / APOSTILA — preenchimento das lacunas por aluno
 // ------------------------------------------------------------
 // Uma linha por aluno em workbook.workbook_respostas; `respostas` é um
-// jsonb chaveado pelo id da lacuna (ex.: { "cap-1-l1": "texto" }).
-// Autosave: cada save é um upsert por user_id (respeita a RLS dono).
+// jsonb chaveado pelo id da lacuna, com envelope por campo:
+//   { "cap-1-l1": { "v": "1.116", "t": 1753500000000 } }
+// Linhas LEGADAS gravaram string crua ({ "cap-1-l1": "1.116" }) — a
+// leitura normaliza para { v, t: 0 }, então qualquer edição local
+// (t > 0) sempre vence o dado antigo sem perdê-lo.
+// O save faz READ → MERGE POR CAMPO (maior t vence) → UPSERT: nunca
+// sobrescreve o mapa inteiro (duas abas não se apagam mais).
 // ============================================================
-/** carrega as respostas do workbook do aluno logado → { respostas, progresso } */
+
+/** o erro veio da rede (offline/timeout) e não de rejeição do servidor? */
+function ehErroDeRede(err) {
+  return /fetch|network|load failed|timeout|abort|conex/i.test(String(err?.message || err))
+}
+
+/** carrega as respostas do aluno logado → { ok, respostas: {id:{v,t}}, progresso } */
 export async function getWorkbook() {
   const uid = currentUserId()
-  if (!uid) return { respostas: {}, progresso: {} }
-  const { data, error } = await supabase
-    .from('workbook_respostas')
-    .select('respostas, progresso')
-    .eq('user_id', uid)
-    .maybeSingle()
-  if (error || !data) return { respostas: {}, progresso: {} }
-  return { respostas: data.respostas || {}, progresso: data.progresso || {} }
+  if (!uid) return { ok: false, code: 'NO_SESSION', respostas: {}, progresso: {} }
+  try {
+    const { data, error } = await supabase
+      .from('workbook_respostas')
+      .select('respostas, progresso')
+      .eq('user_id', uid)
+      .maybeSingle()
+    if (error) {
+      return {
+        ok: false, code: ehErroDeRede(error) ? 'NETWORK' : 'ERROR',
+        message: error.message, respostas: {}, progresso: {},
+      }
+    }
+    return {
+      ok: true,
+      respostas: normalizarRespostas(data?.respostas),
+      progresso: data?.progresso || {},
+    }
+  } catch (e) {
+    return { ok: false, code: 'NETWORK', message: String(e?.message || e), respostas: {}, progresso: {} }
+  }
 }
 
 /**
- * salva o mapa completo de respostas do workbook (upsert por user_id).
- * `progresso` guarda métricas leves (preenchidas, ultima_secao) p/ o "continuar
- * de onde parei". Retorna { ok } — o chamador faz debounce (autosave).
+ * salva respostas com merge por campo. `respostas` no envelope { id: {v,t} }.
+ * Lê o estado remoto atual e mescla campo a campo (maior t vence) — se a
+ * LEITURA falhar, NÃO grava às cegas (gravar sem merge reintroduziria o
+ * bug de sobrescrita). Retorna { ok, respostas: mergeFinal, progresso }
+ * para o store absorver campos em que o remoto venceu.
+ * códigos de erro: NO_SESSION | NETWORK | ERROR
  */
 export async function saveWorkbook(respostas, progresso) {
   const uid = currentUserId()
   if (!uid) return { ok: false, code: 'NO_SESSION' }
+
+  const atual = await getWorkbook()
+  if (!atual.ok) return { ok: false, code: atual.code, message: atual.message }
+
+  const novo = aplicarSaveNoRow(atual, respostas, progresso)
   const registro = {
     user_id: uid,
-    respostas: respostas || {},
-    progresso: progresso || {},
+    respostas: novo.respostas,
+    progresso: novo.progresso,
     atualizado_em: new Date().toISOString(),
   }
-  const { error } = await supabase
-    .from('workbook_respostas')
-    .upsert(registro, { onConflict: 'user_id' })
-  if (error) return { ok: false, code: 'ERROR', message: error.message }
-  return { ok: true }
+  try {
+    const { error } = await supabase
+      .from('workbook_respostas')
+      .upsert(registro, { onConflict: 'user_id' })
+    if (error) {
+      return { ok: false, code: ehErroDeRede(error) ? 'NETWORK' : 'ERROR', message: error.message }
+    }
+    return { ok: true, respostas: novo.respostas, progresso: novo.progresso }
+  } catch (e) {
+    return { ok: false, code: 'NETWORK', message: String(e?.message || e) }
+  }
+}
+
+/**
+ * saveWorkbookBeacon — último recurso ao fechar a aba (pagehide/beforeunload).
+ * `navigator.sendBeacon` não aceita headers (apikey/Authorization), então
+ * usamos fetch com `keepalive: true` direto no PostgREST — o browser completa
+ * o request mesmo com a página fechando. LIMITAÇÃO: é um upsert sem
+ * read-merge prévio; como o payload é o mapa local completo com timestamps
+ * por campo, o merge do próximo sync de qualquer outra aba/dispositivo
+ * corrige eventual corrida. Síncrono, fire-and-forget.
+ */
+export function saveWorkbookBeacon(respostas, progresso) {
+  const uid = currentUserId()
+  const token = _session?.access_token
+  const base = SUPABASE_URL
+  const anon = SUPABASE_ANON
+  if (!uid || !token || !base || !anon) return false
+  // token vencido (ou a segundos de vencer) → não dispara: o POST voltaria 401
+  // e o .catch() engoliria, perdendo o último lote sem qualquer sinal.
+  // `pendentes` fica intacto e o próximo boot drena pelo IndexedDB.
+  const expira = Number(_session?.expires_at) || 0
+  if (expira && expira * 1000 < Date.now() + 60_000) return false
+  try {
+    fetch(`${base}/rest/v1/workbook_respostas?on_conflict=user_id`, {
+      method: 'POST',
+      keepalive: true,
+      headers: {
+        apikey: anon,
+        Authorization: `Bearer ${token}`,
+        'Content-Type': 'application/json',
+        'Content-Profile': 'workbook',           // client usa schema `workbook`
+        Prefer: 'resolution=merge-duplicates,return=minimal',
+      },
+      body: JSON.stringify({
+        user_id: uid,
+        respostas: respostas || {},
+        progresso: progresso || {},
+        atualizado_em: new Date().toISOString(),
+      }),
+    }).catch(() => {})
+    return true
+  } catch { return false }
 }
 
 // ============================================================

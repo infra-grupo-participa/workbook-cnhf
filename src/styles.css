@@ -1,7 +1,33 @@
 /* ============================================================
    Workbook CNHF · tema (preto / branco / #FF6B00) · glass leve
-   Claro por padrão (ambiente de estudo), com dark opcional.
+   Claro por padrão (ambiente de estudo), com sépia e dark.
+   ------------------------------------------------------------
+   Tipografia do LIVRO: Literata (OFL, auto-hospedada em
+   public/fonts — sem CDN, funciona offline via SW cache-first
+   de ./fonts/*). Fallback: a mesma stack serifada do PDF, para
+   tela e impresso lerem como o mesmo produto.
    ============================================================ */
+@font-face {
+  font-family: 'Literata';
+  src: url('/fonts/literata-regular.woff2') format('woff2');
+  font-weight: 400; font-style: normal; font-display: swap;
+}
+@font-face {
+  font-family: 'Literata';
+  src: url('/fonts/literata-italic.woff2') format('woff2');
+  font-weight: 400; font-style: italic; font-display: swap;
+}
+@font-face {
+  font-family: 'Literata';
+  src: url('/fonts/literata-600.woff2') format('woff2');
+  font-weight: 600; font-style: normal; font-display: swap;
+}
+@font-face {
+  font-family: 'Literata';
+  src: url('/fonts/literata-700.woff2') format('woff2');
+  font-weight: 700; font-style: normal; font-display: swap;
+}
+
 :root {
   --accent: #ff6b00;
   --accent-strong: #ff8a33;
@@ -12,7 +38,35 @@
   --bad: #e5533d;
   --radius: 16px;
   --radius-sm: 10px;
-  font-family: -apple-system, 'Segoe UI', Inter, Roboto, sans-serif;
+
+  /* famílias: serifa para o corpo do livro, grotesk só para o chrome da UI.
+     A Literata SÓ entra depois que carrega (html[data-fontes='ok'], setado
+     em usePreferencias.js): o Chromium não refaz o layout de <textarea>/<input>
+     quando uma webfont termina de carregar — se a família já incluísse
+     'Literata' desde o boot, o texto digitado ficaria preso no fallback
+     enquanto o resto da página troca, desalinhando o fantasma do sufixo.
+     Assim, campo e prosa trocam de fonte JUNTOS (ou ficam juntos no
+     fallback — que é a mesma stack serifada do PDF). */
+  --fonte-livro: 'Iowan Old Style', 'Palatino Linotype', Palatino, Georgia, serif;
+  --fonte-ui: -apple-system, 'Segoe UI', Inter, Roboto, sans-serif;
+  --fonte-corpo: var(--fonte-livro);   /* trocável no painel de leitura */
+  font-family: var(--fonte-ui);
+
+  /* escala de leitura (3 passos, painel de leitura) */
+  --fs-livro: 1.09375rem;   /* 17.5px */
+  --lh-livro: 1.75;
+
+  /* ---- tokens do LIVRO · tema claro (papel) ----
+     contrastes medidos (WCAG): tinta 16.2:1 · tinta-2 7.1:1 ·
+     resposta 5.98:1 · pauta 3.75:1 (componente de UI ≥3:1) */
+  --papel: #fcfbf9;
+  --papel-2: #f4f1ea;
+  --tinta: #201d19;
+  --tinta-2: #5c554b;
+  --resposta: #9c4a00;
+  --resposta-bg: rgba(156, 74, 0, 0.07);
+  --pauta: #9b7c55;
+  --pauta-suave: rgba(155, 124, 85, 0.45);
 
   --bg: #f4f4f6;
   --bg-orb: rgba(255, 107, 0, 0.10);
@@ -26,6 +80,31 @@
   --shadow: 0 14px 40px rgba(16, 16, 20, 0.10);
   color-scheme: light;
 }
+/* ---- tema SÉPIA (leitor de livros) ---- */
+:root[data-theme='sepia'] {
+  --bg: #ece2cd;
+  --bg-orb: rgba(255, 107, 0, 0.07);
+  --surface: #f7f0e1;
+  --glass: rgba(247, 240, 225, 0.78);
+  --stroke: rgba(58, 47, 32, 0.14);
+  --stroke-strong: rgba(58, 47, 32, 0.28);
+  --ink: #33291b;
+  --ink-2: rgba(51, 41, 27, 0.66);
+  --ink-3: rgba(51, 41, 27, 0.44);
+  --shadow: 0 14px 40px rgba(58, 47, 32, 0.12);
+  color-scheme: light;
+
+  /* livro: tinta 11.5:1 · tinta-2 5.3:1 · resposta 6.9:1 · pauta 3.6:1 */
+  --papel: #f2e9d8;
+  --papel-2: #eadfc9;
+  --tinta: #352b1d;
+  --tinta-2: #6b5d49;
+  --resposta: #823800;
+  --resposta-bg: rgba(130, 56, 0, 0.08);
+  --pauta: #8b7659;
+  --pauta-suave: rgba(139, 118, 89, 0.5);
+}
+
 :root[data-theme='dark'] {
   --bg: #0b0b0e;
   --bg-orb: rgba(255, 107, 0, 0.14);
@@ -38,7 +117,28 @@
   --ink-3: rgba(245, 245, 247, 0.38);
   --shadow: 0 14px 40px rgba(0, 0, 0, 0.5);
   color-scheme: dark;
+
+  /* livro noturno (papel quente escuro):
+     tinta 14.2:1 · tinta-2 7.8:1 · resposta 9.7:1 · pauta 3.98:1 */
+  --papel: #191612;
+  --papel-2: #211d17;
+  --tinta: #eae4d9;
+  --tinta-2: #b3aa9b;
+  --resposta: #ffab66;
+  --resposta-bg: rgba(255, 171, 102, 0.09);
+  --pauta: #857457;
+  --pauta-suave: rgba(133, 116, 87, 0.55);
 }
+
+/* ---- preferências de leitura (persistidas pelo painel) ---- */
+:root[data-fontes='ok'] {
+  --fonte-livro: 'Literata', 'Iowan Old Style', 'Palatino Linotype', Palatino, Georgia, serif;
+}
+:root[data-fs='1'] { --fs-livro: 1rem; }         /* 16px */
+:root[data-fs='3'] { --fs-livro: 1.21875rem; }   /* 19.5px */
+:root[data-lh='1'] { --lh-livro: 1.6; }
+:root[data-lh='3'] { --lh-livro: 1.95; }
+:root[data-fonte='sans'] { --fonte-corpo: var(--fonte-ui); }
 
 * { box-sizing: border-box; }
 html, body, #app { min-height: 100%; }
@@ -120,3 +220,20 @@ textarea { resize: vertical; min-height: 90px; }
 
 ::-webkit-scrollbar { width: 10px; height: 10px; }
 ::-webkit-scrollbar-thumb { background: var(--stroke-strong); border-radius: 999px; }
+
+/* foco visível por teclado, em qualquer tema (nunca outline:none sem substituto) */
+:focus-visible {
+  outline: 2px solid var(--resposta, var(--accent));
+  outline-offset: 2px;
+  border-radius: 2px;
+}
+
+/* leitura acessível: quem pede menos movimento recebe menos movimento */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;   /* preferência do usuário > estética */
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}

@@ -1,0 +1,26 @@
+{
+  "name": "Workbook · Curso Nacional de Formação em Holding Familiar",
+  "short_name": "Workbook CNHF",
+  "description": "Ambiente do aluno do Curso Nacional de Formação em Holding Familiar",
+  "lang": "pt-BR",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait",
+  "theme_color": "#ff6b00",
+  "background_color": "#ffffff",
+  "icons": [
+    {
+      "src": "./favicon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    },
+    {
+      "src": "./logo-cnhf.png",
+      "sizes": "1920x1080",
+      "type": "image/png",
+      "purpose": "any"
+    }
+  ]
+}

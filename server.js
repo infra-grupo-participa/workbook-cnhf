@@ -60,6 +60,19 @@ function ensureBuild() {
 const app = express()
 app.set('trust proxy', true) // HTTPS/IP real atrás do proxy da hospedagem
 
+// Headers de segurança — PRIMEIRA middleware, antes de qualquer rota, para
+// valer também no /health e na página de "preparando…".
+app.use((req, res, next) => {
+  res.setHeader('Content-Security-Policy', CSP)
+  res.setHeader('X-Content-Type-Options', 'nosniff')
+  res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin')
+  res.setHeader('Permissions-Policy', 'geolocation=(), camera=(), microphone=(self)')
+  res.setHeader('Strict-Transport-Security', 'max-age=31536000; includeSubDomains')
+  // o SW é o arquivo com maior poder na origem: nunca servir versão velha dele
+  if (req.path.endsWith('/sw.js')) res.setHeader('Cache-Control', 'no-cache')
+  next()
+})
+
 // Healthcheck — responde SEMPRE, independente do dist/.
 app.get('/health', (_req, res) =>
   res.json({ ok: true, service: 'workbook-cnhf', distOk: !!resolveDist(), building })
@@ -68,6 +81,31 @@ app.get('/health', (_req, res) =>
 // ------------------------------------------------------------
 // (FASE 2) Endpoints de back-end vão AQUI, antes do fallback SPA.
 // ------------------------------------------------------------
+
+/*
+  Headers de segurança. Importam desproporcionalmente aqui por causa do gerador
+  de livro: book-print.js abre `about:blank` via window.open + document.write, e
+  esse documento HERDA a origem do app — uma regressão de escape ali viraria
+  execução same-origin com acesso ao localStorage (refresh token do Supabase).
+  A CSP do documento pai é herdada pelo about:blank e é a rede de proteção.
+
+  'unsafe-inline' em style-src é necessário: o book-render.js injeta <style> e
+  atributos style= no HTML do livro. script-src fica sem exceção nenhuma.
+  microphone=(self) porque o ditado por voz usa a Web Speech API.
+*/
+const SUPABASE_ORIGEM = (process.env.VITE_SUPABASE_URL || 'https://mbvybujpkwuorhtdzcde.supabase.co').replace(/\/+$/, '')
+const CSP = [
+  "default-src 'self'",
+  "script-src 'self'",
+  "style-src 'self' 'unsafe-inline'",
+  "img-src 'self' data:",
+  "font-src 'self'",
+  `connect-src 'self' ${SUPABASE_ORIGEM} wss://${new URL(SUPABASE_ORIGEM).host}`,
+  "frame-ancestors 'none'",
+  "base-uri 'none'",
+  "object-src 'none'",
+  "form-action 'self'",
+].join('; ')
 
 // Estáticos + fallback SPA, resolvendo o dist/ a cada request.
 app.use((req, res, next) => {

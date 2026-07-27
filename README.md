@@ -67,8 +67,10 @@ npm run serve
 
 ## Deploy
 
-O `dist/` **não** é versionado (ver `.gitignore`); rode `npm run build` no destino
-(ou no CI) antes de `npm start`. Numa plataforma Node típica:
+O `dist/` **é** versionado de propósito (ver o comentário no `.gitignore`): a Hostinger
+Node app às vezes reinicia o processo sem o build no lugar e passa a exibir
+"preparando…". Com o `dist/` no repo, ele sempre existe em runtime. **Rebuilde e
+committe o `dist/` junto a cada mudança de código.** Numa plataforma Node típica:
 
 - **Build command:** `npm install && npm run build`
 - **Start command:** `npm start`

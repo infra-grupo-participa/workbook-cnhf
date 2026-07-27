@@ -1,5 +1,5 @@
 <script setup>
-import { ref, computed } from 'vue'
+import { ref, computed, nextTick, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import LogoCNHF from '../components/LogoCNHF.vue'
 import Check from '@lucide/vue/dist/esm/icons/check.mjs'
@@ -24,16 +24,18 @@ const travado = route.query.motivo === 'trava'
 const contato = ref({ nome: '', email: '', telefone: '' })
 const respostas = ref({})
 
-// FLUXO EM PASSOS (uma pergunta por tela):
-//   0 .. TOTAL-1  → perguntas de qualificação
-//   [público] TOTAL   → tela do E-MAIL
-//   [público] TOTAL+1 → tela do WHATSAPP
-//   [público] TOTAL+2 → tela do NOME
-// Ordem dos dados pessoais: e-mail (chave de acesso) → WhatsApp → nome.
+// FLUXO EM PASSOS (uma pergunta por tela). O E-MAIL vem PRIMEIRO no modo público:
+// assim, se o lead abandonar no meio, o contato já foi capturado (permite re-disparo).
+//   [público] 0        → tela do E-MAIL (captura antes do abandono)
+//   [público] 1..TOTAL → perguntas de qualificação
+//   [público] TOTAL+1  → tela do WHATSAPP (opcional)
+//   [público] TOTAL+2  → tela do NOME
+//   [logado]  0..TOTAL-1 → só as perguntas (nome/e-mail já existem)
 const TOTAL = SURVEY.length
-const PASSO_EMAIL = TOTAL
-const PASSO_WHATS = TOTAL + 1
-const PASSO_NOME = TOTAL + 2
+const PASSO_EMAIL = 0
+const OFFSET_PERGUNTA = modoPublico ? 1 : 0   // no público, as perguntas começam no passo 1
+const PASSO_WHATS = OFFSET_PERGUNTA + TOTAL
+const PASSO_NOME = OFFSET_PERGUNTA + TOTAL + 1
 const ultimoPasso = modoPublico ? PASSO_NOME : TOTAL - 1
 
 const passo = ref(0)
@@ -44,17 +46,28 @@ const erro = ref('')
 const acesso = ref(null) // { email, senha, surveyPending }
 const copiado = ref(false)
 
-const atual = computed(() => SURVEY[passo.value] || null)     // pergunta atual (ou null nas telas de contato)
-const naPergunta = computed(() => passo.value <= TOTAL - 1)
-const noNome = computed(() => passo.value === PASSO_NOME)
-const noEmail = computed(() => passo.value === PASSO_EMAIL)
-const noWhats = computed(() => passo.value === PASSO_WHATS)
+// índice da pergunta atual (0..TOTAL-1) considerando o offset do e-mail
+const idxPergunta = computed(() => passo.value - OFFSET_PERGUNTA)
+const noEmail = computed(() => modoPublico && passo.value === PASSO_EMAIL)
+const naPergunta = computed(() =>
+  passo.value >= OFFSET_PERGUNTA && passo.value <= OFFSET_PERGUNTA + TOTAL - 1)
+const atual = computed(() => (naPergunta.value ? SURVEY[idxPergunta.value] : null))
+const noWhats = computed(() => modoPublico && passo.value === PASSO_WHATS)
+const noNome = computed(() => modoPublico && passo.value === PASSO_NOME)
 const ehUltimo = computed(() => passo.value === ultimoPasso)
+
+// pergunta atual é opcional? (perguntas de texto não-obrigatórias ganham "Pular")
+const opcionalAtual = computed(() => naPergunta.value && !!atual.value && !atual.value.obrigatoria)
 
 // progresso: total de telas = perguntas (+ e-mail + WhatsApp + nome no público)
 const etapasTotais = modoPublico ? TOTAL + 3 : TOTAL
+// quantas telas ainda faltam (p/ a contagem regressiva)
+const faltam = computed(() => Math.max(0, etapasTotais - 1 - passo.value))
 const preenchidoAtual = computed(() => {
+  if (noEmail.value) return !checarEmail()
   if (naPergunta.value) {
+    // pergunta opcional → sempre pode avançar (com ou sem resposta)
+    if (!atual.value.obrigatoria) return true
     const v = respostas.value[atual.value.id]
     if (v == null || String(v).trim().length === 0) return false
     // se a opção escolhida revela um sub-campo OBRIGATÓRIO, ele também precisa
@@ -66,9 +79,8 @@ const preenchidoAtual = computed(() => {
     }
     return true
   }
+  if (noWhats.value) return true          // WhatsApp é opcional
   if (noNome.value) return !checarNome()
-  if (noEmail.value) return !checarEmail()
-  if (noWhats.value) return !checarWhats()
   return false
 })
 
@@ -112,7 +124,7 @@ function checarEmail() {
 }
 function checarWhats() {
   const d = String(contato.value.telefone || '').replace(/\D/g, '')
-  if (!d) return 'Informe o seu WhatsApp com DDD.'
+  if (!d) return ''                       // opcional: vazio é permitido
   if (d.length < 10 || d.length > 11) return 'Informe o DDD + número completo.'
   return ''
 }
@@ -153,8 +165,26 @@ function escolherCondicional(op) {
   setTimeout(() => { if (passo.value < ultimoPasso) passo.value++ }, 220)
 }
 
+// avança sem responder (perguntas opcionais e WhatsApp)
+function pular() {
+  if (opcionalAtual.value) {
+    // limpa qualquer rascunho parcial da pergunta pulada
+    if (atual.value) delete respostas.value[atual.value.id]
+  }
+  erro.value = ''
+  if (ehUltimo.value) return finalizar()
+  passo.value++
+}
+
 function avancar() {
   erro.value = ''
+  if (noEmail.value) {
+    erros.value.email = checarEmail()
+    if (erros.value.email) { erro.value = erros.value.email; return }
+    contato.value.email = contato.value.email.trim().toLowerCase()
+    passo.value++
+    return
+  }
   if (naPergunta.value) {
     if (!preenchidoAtual.value) {
       const cond = condicionalAtual.value
@@ -164,13 +194,6 @@ function avancar() {
       return
     }
     if (ehUltimo.value) return finalizar()   // modo logado: última pergunta finaliza
-    passo.value++
-    return
-  }
-  if (noEmail.value) {
-    erros.value.email = checarEmail()
-    if (erros.value.email) { erro.value = erros.value.email; return }
-    contato.value.email = contato.value.email.trim().toLowerCase()
     passo.value++
     return
   }
@@ -202,7 +225,7 @@ async function finalizar() {
     const cond = q.revela && q.revela[respostas.value[q.id]]
     return cond && cond.obrigatoria && vazio(cond.id)
   })
-  if (faltando) { erro.value = 'Ainda falta responder alguma pergunta.'; passo.value = SURVEY.indexOf(faltando); return }
+  if (faltando) { erro.value = 'Ainda falta responder alguma pergunta.'; passo.value = OFFSET_PERGUNTA + SURVEY.indexOf(faltando); return }
 
   enviando.value = true
   if (modoPublico) {
@@ -246,8 +269,26 @@ async function entrarNoAmbiente() {
 
 // rótulo do topo (contexto de cada tela)
 const eyebrow = computed(() => {
-  if (noNome.value || noEmail.value || noWhats.value) return 'Quase lá · seus dados de acesso'
-  return `Pesquisa de qualificação · pergunta ${passo.value + 1} de ${TOTAL}`
+  if (noEmail.value) return 'Comece por aqui'
+  if (noNome.value || noWhats.value) return 'Quase lá · seus dados de acesso'
+  return `Pergunta ${idxPergunta.value + 1} de ${TOTAL}`
+})
+
+// contagem regressiva amigável (sensação de fim próximo → menos abandono)
+const regressiva = computed(() => {
+  if (ehUltimo.value) return 'Última etapa!'
+  const n = faltam.value
+  if (n === 1) return 'Falta só 1 etapa'
+  return `Faltam ${n} etapas`
+})
+
+// --- autofocus: ao trocar de tela, foca o campo de texto/input principal ---
+const campoRef = ref(null)
+watch(passo, () => {
+  nextTick(() => {
+    const el = campoRef.value
+    if (el && typeof el.focus === 'function') el.focus()
+  })
 })
 </script>
 
@@ -305,11 +346,13 @@ const eyebrow = computed(() => {
 
       <div class="progresso">
         <div class="barra"><div class="fill" :style="{ width: ((passo + (preenchidoAtual ? 1 : 0)) / etapasTotais * 100) + '%' }" /></div>
+        <div class="progresso-legenda muted">{{ regressiva }}</div>
       </div>
 
       <div v-if="modoPublico && passo === 0" class="alert warn">
-        Responda esta pesquisa rápida para liberar o seu acesso ao workbook. Ao final,
-        você recebe os seus dados de acesso.
+        Responda esta pesquisa rápida e <strong>ganhe acesso imediato ao workbook</strong> do
+        Curso Nacional de Formação em Holding Familiar — com o material das aulas para
+        acompanhar e preencher. Leva menos de 2 minutos.
       </div>
       <div v-else-if="travado && passo === 0" class="alert warn">
         O seu acesso ao ambiente do aluno é liberado assim que você responde esta pesquisa rápida. É só uma vez.
@@ -356,17 +399,20 @@ const eyebrow = computed(() => {
           </Transition>
 
           <textarea
-            v-if="atual.tipo === 'textarea'" v-model="respostas[atual.id]" :placeholder="atual.placeholder"
+            v-if="atual.tipo === 'textarea'" ref="campoRef"
+            v-model="respostas[atual.id]" :placeholder="atual.placeholder"
+            @keydown.enter.exact.prevent="avancar"
             @keydown.ctrl.enter="avancar" @keydown.meta.enter="avancar"
           />
         </div>
 
-        <!-- TELA DO E-MAIL -->
+        <!-- TELA DO E-MAIL (primeira do funil público: captura o contato cedo) -->
         <div v-else-if="noEmail" key="email" class="q">
           <div class="q-label">Qual o seu melhor e-mail?</div>
-          <p class="q-ajuda muted">Será o seu login de acesso — use o mesmo e-mail da sua inscrição.</p>
+          <p class="q-ajuda muted">Será o seu login de acesso ao workbook — use o mesmo e-mail da sua inscrição.</p>
           <label class="field grande">
             <input
+              ref="campoRef"
               type="email" v-model="contato.email" placeholder="voce@email.com"
               autocomplete="email" inputmode="email" :class="{ invalido: erros.email }"
               @input="erros.email = ''" @blur="blurEmail" @keydown.enter="avancar"
@@ -375,12 +421,13 @@ const eyebrow = computed(() => {
           </label>
         </div>
 
-        <!-- TELA DO WHATSAPP -->
+        <!-- TELA DO WHATSAPP (opcional) -->
         <div v-else-if="noWhats" key="whats" class="q">
           <div class="q-label">Qual o seu WhatsApp?</div>
-          <p class="q-ajuda muted">É por onde a nossa equipe fala com você sobre o curso.</p>
+          <p class="q-ajuda muted">É por onde você recebe os avisos das aulas e o suporte da equipe. (Opcional)</p>
           <label class="field grande">
             <input
+              ref="campoRef"
               type="tel" :value="contato.telefone" placeholder="(11) 99999-9999"
               autocomplete="tel" inputmode="numeric" maxlength="16" :class="{ invalido: erros.telefone }"
               @input="contato.telefone = mascararTelefone($event.target.value); erros.telefone = ''"
@@ -396,6 +443,7 @@ const eyebrow = computed(() => {
           <p class="q-ajuda muted">É assim que vamos te chamar no ambiente do aluno.</p>
           <label class="field grande">
             <input
+              ref="campoRef"
               type="text" v-model="contato.nome" placeholder="Seu nome completo"
               autocomplete="name" :class="{ invalido: erros.nome }"
               @input="erros.nome = ''" @blur="blurNome" @keydown.enter="avancar"
@@ -409,9 +457,16 @@ const eyebrow = computed(() => {
 
       <div class="nav">
         <button class="btn ghost" :disabled="passo === 0" @click="voltar">Voltar</button>
-        <button class="btn primary" :disabled="enviando" @click="avancar">
-          {{ enviando ? 'Liberando acesso...' : (ehUltimo ? 'Finalizar e liberar meu acesso' : 'Continuar') }}
-        </button>
+        <div class="nav-dir">
+          <!-- Pular: perguntas opcionais e WhatsApp (não trava o funil) -->
+          <button
+            v-if="opcionalAtual || noWhats"
+            class="btn ghost pular" :disabled="enviando" @click="pular"
+          >Pular</button>
+          <button class="btn primary" :disabled="enviando" @click="avancar">
+            {{ enviando ? 'Liberando acesso...' : (ehUltimo ? 'Finalizar e liberar meu acesso' : 'Continuar') }}
+          </button>
+        </div>
       </div>
     </div>
   </div>
@@ -430,6 +485,7 @@ const eyebrow = computed(() => {
 .progresso { margin: 14px 0 22px; }
 .barra { height: 8px; border-radius: 999px; background: var(--stroke); overflow: hidden; }
 .fill { height: 100%; background: var(--accent); border-radius: 999px; transition: width .35s cubic-bezier(.4,0,.2,1); }
+.progresso-legenda { font-size: 12px; font-weight: 600; margin-top: 7px; text-align: right; letter-spacing: .01em; }
 
 .q { flex: 1; }
 .q-label { font-size: 22px; font-weight: 700; line-height: 1.35; margin-bottom: 8px; letter-spacing: -0.01em; }
@@ -453,8 +509,12 @@ const eyebrow = computed(() => {
 .obrig { color: var(--accent); font-style: normal; font-weight: 700; margin-left: 2px; }
 textarea { min-height: 140px; font-size: 15.5px; margin-top: 4px; }
 
-.nav { display: flex; justify-content: space-between; gap: 12px; margin-top: 28px; }
+.nav { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-top: 28px; }
 .nav .btn { min-width: 108px; }
+.nav-dir { display: flex; gap: 10px; align-items: center; }
+.nav-dir .pular { min-width: auto; color: var(--ink-2); }
+.nav-dir .pular:hover { color: var(--ink); }
+@media (max-width: 420px) { .nav-dir .pular { min-width: 84px; } }
 
 .fade-enter-active, .fade-leave-active { transition: opacity .2s ease, transform .2s ease; }
 .fade-enter-from { opacity: 0; transform: translateX(14px); }

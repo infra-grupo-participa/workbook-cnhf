@@ -35,20 +35,21 @@ export const SURVEY = [
     placeholder: 'Escreve com as suas palavras...' },
 
   // 4. Obstáculo p/ tornar a holding familiar a PRINCIPAL área de atuação (aberta).
-  { id: 'dificuldade_holding_principal', tipo: 'textarea', chart: false, obrigatoria: true,
+  // OPCIONAL (2026-07-26): reduzir atrito — só a 1ª aberta (dificuldade) é obrigatória.
+  { id: 'dificuldade_holding_principal', tipo: 'textarea', chart: false, obrigatoria: false,
     label: 'Que tipo de dificuldade ou obstáculo você acredita que pode ter para fazer o trabalho com Holding Familiar ser a sua principal área de atuação?',
-    placeholder: 'Escreve com as suas palavras...' },
+    placeholder: 'Escreve com as suas palavras... (opcional)' },
 
-  // 5. "Mundo dos sonhos": o que a carreira deveria entregar e ainda não entrega (aberta).
-  { id: 'mundo_sonhos', tipo: 'textarea', chart: false, obrigatoria: true,
+  // 5. "Mundo dos sonhos": o que a carreira deveria entregar e ainda não entrega (aberta). OPCIONAL.
+  { id: 'mundo_sonhos', tipo: 'textarea', chart: false, obrigatoria: false,
     label: 'No seu mundo dos sonhos, o que você esperaria que a sua carreira estivesse te entregando e que ainda não está?',
-    placeholder: 'Escreve com as suas palavras...' },
+    placeholder: 'Escreve com as suas palavras... (opcional)' },
 
   // 6. (antes do pitch) dificuldade percebida para COMEÇAR. Entra na varredura
-  // de dor (nao_sabe_comecar). Fecha a pesquisa.
-  { id: 'dificuldade_comecar', tipo: 'textarea', chart: false, obrigatoria: true,
+  // de dor (nao_sabe_comecar). Fecha a pesquisa. OPCIONAL.
+  { id: 'dificuldade_comecar', tipo: 'textarea', chart: false, obrigatoria: false,
     label: 'Qual dificuldade você acredita que terá para começar a trabalhar com Holding Familiar?',
-    placeholder: 'Escreve com as suas palavras...' },
+    placeholder: 'Escreve com as suas palavras... (opcional)' },
 ]
 
 export const SURVEY_CHART = SURVEY.filter((q) => q.chart)

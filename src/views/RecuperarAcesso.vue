@@ -18,7 +18,11 @@ import { recuperarAcesso } from '../data/api.js'
 
 // Canal de suporte para quem trocou de número (preencher quando a equipe
 // definir o link — ex.: 'https://wa.me/55...'). Vazio → orientação em texto.
-const LINK_SUPORTE = ''
+// Canal de socorro para quem trocou de número e não consegue mais recuperar
+// sozinho. Configurável por ambiente (ex.: VITE_LINK_SUPORTE=https://wa.me/55...)
+// para não exigir mudança de código. Vazio = mostra orientação sem link, nunca
+// deixa o aluno num beco sem saída.
+const LINK_SUPORTE = import.meta.env.VITE_LINK_SUPORTE || ''
 
 const router = useRouter()
 

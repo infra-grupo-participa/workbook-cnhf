@@ -16,14 +16,22 @@
    ============================================================ */
 
 import express from 'express'
-import { fileURLToPath } from 'node:url'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 import { dirname, join } from 'node:path'
 import { existsSync } from 'node:fs'
 import { spawn } from 'node:child_process'
+import { randomInt } from 'node:crypto'
+import { createClient } from '@supabase/supabase-js'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const PORT = process.env.PORT || 3000
 const HOST = process.env.HOST || '0.0.0.0'
+
+// executado direto (npm start) ou importado por um teste? Quando importado,
+// NÃO sobe o listener nem dispara build — só exporta app e utilitários.
+const EH_MAIN = (() => {
+  try { return import.meta.url === pathToFileURL(process.argv[1]).href } catch { return true }
+})()
 
 // Resolve o dist/ dinamicamente: o cwd do runtime pode diferir do dir do
 // server.js. Retorna o 1º candidato que tenha index.html, ou null.
@@ -78,9 +86,266 @@ app.get('/health', (_req, res) =>
   res.json({ ok: true, service: 'workbook-cnhf', distOk: !!resolveDist(), building })
 )
 
+// ============================================================
+// POST /api/recuperar-acesso — recuperação de acesso SEM e-mail
 // ------------------------------------------------------------
-// (FASE 2) Endpoints de back-end vão AQUI, antes do fallback SPA.
-// ------------------------------------------------------------
+// O aluno deslogado informa e-mail + telefone do cadastro + nova
+// senha. Se (e-mail, telefone) conferirem com o cadastro, a senha é
+// trocada via service_role (Admin API do GoTrue). Decisão de produto
+// registrada em tmp/squad/extra-workbook.md (riscos aceitos).
+//
+// Propriedades de segurança OBRIGATÓRIAS deste endpoint:
+//  1. RESPOSTA UNIFORME: sucesso, e-mail inexistente, telefone errado e
+//     até erro interno pós-validação devolvem o MESMO status (200) e o
+//     MESMO corpo. Um 500 só no caminho do update revelaria que o par
+//     (e-mail, telefone) confere — por isso erro interno também responde
+//     uniforme (fica só no log). O front descobre o resultado tentando
+//     logar com a senha nova.
+//  2. TEMPO CONSTANTE-ISH: todas as consultas rodam em paralelo nos dois
+//     caminhos e a resposta é segurada até um piso de tempo + jitter.
+//     Se o trabalho real estourar o piso, logamos aviso (observável).
+//  3. RATE LIMIT por IP e por e-mail com bloqueio progressivo.
+//     LIMITAÇÃO CONHECIDA: o estado é EM MEMÓRIA — vale porque a
+//     Hostinger roda UM processo; com N processos/instâncias cada um
+//     teria contador próprio (multiplica o limite por N) e reiniciar o
+//     processo zera os contadores. Se um dia houver cluster, mover para
+//     Redis/tabela.
+//  4. service_role SÓ AQUI, lida de env. Sem a env o endpoint responde
+//     503 explícito (nunca "sempre nega" silencioso) e o boot loga alto.
+//  5. AUDITORIA: toda tentativa vira uma linha [auditoria] no stdout
+//     (e-mail, IP, resultado, motivo, ms) — hoje não havia registro
+//     nenhum de troca de senha. (Follow-up: persistir em tabela.)
+// ============================================================
+
+const SUPABASE_URL_SRV =
+  (process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL || 'https://mbvybujpkwuorhtdzcde.supabase.co').replace(/\/+$/, '')
+const SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || ''
+
+if (!SERVICE_ROLE_KEY) {
+  console.error(
+    '[workbook] ATENÇÃO: SUPABASE_SERVICE_ROLE_KEY ausente — ' +
+    'POST /api/recuperar-acesso vai responder 503 até a env ser configurada.'
+  )
+}
+
+// client admin: bypassa RLS e fala com a Admin API do GoTrue. NUNCA importar
+// nada daqui em src/ — este arquivo não entra no bundle do Vite.
+// Timeout em toda chamada externa: uma pendurada não pode segurar o handler.
+const admin = SERVICE_ROLE_KEY
+  ? createClient(SUPABASE_URL_SRV, SERVICE_ROLE_KEY, {
+      db: { schema: 'workbook' },
+      auth: { persistSession: false, autoRefreshToken: false },
+      global: {
+        fetch: (input, init = {}) =>
+          fetch(input, { ...init, cache: 'no-store', signal: AbortSignal.timeout(8000) }),
+      },
+    })
+  : null
+
+// ---------- normalização de telefone (BR) ----------
+/**
+ * Reduz um telefone brasileiro a uma forma canônica só-dígitos:
+ * remove máscara, zeros de tronco ("011"), o +55 (sem confundir com o
+ * DDD 55, que existe — só remove quando sobram >= 12 dígitos) e o
+ * 9º dígito de celular (11 dígitos com "9" na 3ª posição → 10).
+ * Ex.: "+55 (11) 98765-4321" → "1187654321".
+ */
+export function normalizarTelefone(bruto) {
+  let d = String(bruto || '').replace(/\D+/g, '')
+  d = d.replace(/^0+/, '')                                  // 011 98765... → 11 98765...
+  if (d.length >= 12 && d.startsWith('55')) d = d.slice(2)  // +55 — mas nunca um DDD 55 sozinho
+  d = d.replace(/^0+/, '')                                  // "+55 011..." deixa 0 sobrando
+  if (d.length === 11 && d[2] === '9') d = d.slice(0, 2) + d.slice(3) // 9º dígito
+  return d
+}
+
+/**
+ * O telefone digitado confere com o do cadastro? Compara as formas
+ * canônicas; se um dos lados foi digitado SEM DDD (<= 9 dígitos),
+ * compara os 8 dígitos finais. DDDs diferentes com mesmo número local
+ * NÃO conferem (os dois lados com DDD exigem igualdade exata).
+ */
+export function telefonesEquivalentes(a, b) {
+  const na = normalizarTelefone(a)
+  const nb = normalizarTelefone(b)
+  if (na.length < 8 || nb.length < 8) return false
+  if (na === nb) return true
+  const umSemDdd = na.length <= 9 || nb.length <= 9
+  return umSemDdd && na.slice(-8) === nb.slice(-8)
+}
+
+// ---------- rate limit em memória (ver LIMITAÇÃO no cabeçalho) ----------
+const RL = {
+  janelaMs: Number(process.env.RL_JANELA_MS) || 15 * 60_000,
+  maxEmail: Number(process.env.RL_MAX_EMAIL) || 5,
+  maxIp: Number(process.env.RL_MAX_IP) || 20,
+  bloqueioBaseMs: 15 * 60_000,
+  bloqueioMaxMs: 24 * 3_600_000,
+  maxChaves: 50_000, // teto duro de memória (~poucos MB)
+  mapa: new Map(),   // chave → { hits: [ts], bloqueadoAte, violacoes }
+}
+
+/**
+ * Registra a tentativa nas duas dimensões e devolve o timestamp até o qual
+ * está bloqueado (0 = passa). Bloqueio progressivo: cada estouro dobra a
+ * duração (15min → 30 → 60 → ... → 24h).
+ */
+function limitar(ip, email) {
+  const agora = Date.now()
+  let bloqueadoAte = 0
+  for (const { chave, max } of [
+    { chave: `ip:${ip}`, max: RL.maxIp },
+    { chave: `em:${email}`, max: RL.maxEmail },
+  ]) {
+    let r = RL.mapa.get(chave)
+    if (!r) { r = { hits: [], bloqueadoAte: 0, violacoes: 0 }; RL.mapa.set(chave, r) }
+    if (r.bloqueadoAte > agora) { bloqueadoAte = Math.max(bloqueadoAte, r.bloqueadoAte); continue }
+    r.hits = r.hits.filter((t) => agora - t < RL.janelaMs)
+    r.hits.push(agora)
+    if (r.hits.length > max) {
+      r.violacoes += 1
+      r.bloqueadoAte = agora + Math.min(RL.bloqueioBaseMs * 2 ** (r.violacoes - 1), RL.bloqueioMaxMs)
+      r.hits = []
+      bloqueadoAte = Math.max(bloqueadoAte, r.bloqueadoAte)
+    }
+  }
+  return bloqueadoAte
+}
+
+// faxina periódica + teto duro (nunca crescer sem limite)
+setInterval(() => {
+  const agora = Date.now()
+  for (const [chave, r] of RL.mapa) {
+    const ocioso = !r.hits.length || agora - r.hits[r.hits.length - 1] > RL.janelaMs
+    if (r.bloqueadoAte < agora && ocioso) RL.mapa.delete(chave)
+  }
+  let excesso = RL.mapa.size - RL.maxChaves
+  for (const chave of RL.mapa.keys()) { if (excesso-- <= 0) break; RL.mapa.delete(chave) }
+}, 5 * 60_000).unref()
+
+/**
+ * IP do cliente para rate limit. `trust proxy: true` faz req.ip ser o
+ * PRIMEIRO X-Forwarded-For — que o cliente controla (spoof trivial do
+ * limite por IP). Usamos o ÚLTIMO salto do XFF (acrescentado pelo proxy
+ * da hospedagem) ou o endereço do socket quando não há proxy.
+ */
+function ipCliente(req) {
+  const xff = String(req.headers['x-forwarded-for'] || '')
+    .split(',').map((s) => s.trim()).filter(Boolean)
+  return xff.length ? xff[xff.length - 1] : (req.socket?.remoteAddress || 'desconhecido')
+}
+
+// ---------- helpers do handler ----------
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
+const RESPOSTA_UNIFORME = Object.freeze({
+  ok: true,
+  mensagem: 'Se os dados conferirem com o cadastro, sua senha foi atualizada. Entre com a nova senha.',
+})
+const PISO_MS = 1200 // > pior caso observado das chamadas ao Supabase
+
+const dormir = (ms) => new Promise((r) => setTimeout(r, ms))
+
+function auditar(evento) {
+  // stdout = log da Node app na Hostinger. Follow-up: persistir em tabela.
+  console.log('[auditoria][recuperar-acesso]', JSON.stringify({ ts: new Date().toISOString(), ...evento }))
+}
+
+/** user do Auth por e-mail (via Admin API; generateLink não envia e-mail). */
+async function buscarUsuario(email) {
+  const { data, error } = await admin.auth.admin.generateLink({ type: 'recovery', email })
+  if (error) return null // "User not found" cai aqui — indistinguível na resposta
+  return data?.user || null
+}
+
+/**
+ * Telefones em arquivo para o e-mail: workbook.leads (gravado pelo trigger
+ * no signUp) e workbook.respostas_pesquisa (informado na pesquisa).
+ * Erro de schema/tabela NÃO vira negação silenciosa: loga alto e segue
+ * com a outra fonte.
+ */
+async function buscarTelefones(email) {
+  const fontes = ['leads', 'respostas_pesquisa']
+  const resultados = await Promise.all(fontes.map(async (tabela) => {
+    const { data, error } = await admin.from(tabela).select('telefone').eq('email', email)
+    if (error) {
+      console.error(`[workbook] recuperar-acesso: falha lendo ${tabela}:`, error.message)
+      return []
+    }
+    return (data || []).map((r) => r.telefone).filter(Boolean)
+  }))
+  return resultados.flat()
+}
+
+app.post('/api/recuperar-acesso', express.json({ limit: '8kb' }), async (req, res) => {
+  const t0 = Date.now()
+  const ip = ipCliente(req)
+  const email = String(req.body?.email || '').trim().toLowerCase()
+  const telefone = typeof req.body?.telefone === 'string' ? req.body.telefone : ''
+  const senha = typeof req.body?.senha === 'string' ? req.body.senha : ''
+
+  // sem service_role: erro EXPLÍCITO, nunca degradar para "sempre nega"
+  if (!admin) {
+    auditar({ email, ip, resultado: 'config', motivo: 'SUPABASE_SERVICE_ROLE_KEY ausente' })
+    return res.status(503).json({ ok: false, code: 'CONFIG', mensagem: 'Recuperação de acesso indisponível no momento.' })
+  }
+
+  // rate limit ANTES de qualquer trabalho (conta inclusive tentativas inválidas)
+  const bloqueadoAte = limitar(ip, email)
+  if (bloqueadoAte) {
+    const seg = Math.ceil((bloqueadoAte - Date.now()) / 1000)
+    auditar({ email, ip, resultado: 'rate_limit', bloqueadoPorSeg: seg })
+    return res.status(429).set('Retry-After', String(seg))
+      .json({ ok: false, code: 'RATE_LIMIT', mensagem: 'Muitas tentativas. Aguarde alguns minutos e tente de novo.' })
+  }
+
+  // validação de formato — depende só do input, não do banco (não vaza estado)
+  const digitos = telefone.replace(/\D+/g, '')
+  if (
+    !EMAIL_RE.test(email) || email.length > 254 ||
+    digitos.length < 8 || digitos.length > 13 ||
+    senha.length < 8 || senha.length > 72
+  ) {
+    auditar({ email, ip, resultado: 'invalido' })
+    return res.status(400).json({ ok: false, code: 'INVALID', mensagem: 'Dados inválidos. Confira e-mail, WhatsApp e a senha (mínimo 8 caracteres).' })
+  }
+
+  let resultado = 'sem_match'
+  let motivo = ''
+  try {
+    // mesmas consultas, em paralelo, exista o e-mail ou não (uniformidade)
+    const [usuario, telefones] = await Promise.all([buscarUsuario(email), buscarTelefones(email)])
+    const confere = !!usuario && telefones.some((t) => telefonesEquivalentes(t, telefone))
+    if (confere) {
+      const { error } = await admin.auth.admin.updateUserById(usuario.id, { password: senha })
+      if (error) { resultado = 'erro'; motivo = error.message }
+      else resultado = 'sucesso'
+    } else {
+      motivo = !usuario ? 'email_nao_cadastrado'
+        : telefones.length === 0 ? 'sem_telefone_no_cadastro'
+        : 'telefone_nao_confere'
+    }
+  } catch (e) {
+    resultado = 'erro'
+    motivo = String(e?.message || e)
+  }
+
+  const decorridoMs = Date.now() - t0
+  auditar({ email, ip, resultado, motivo, decorridoMs })
+  if (decorridoMs > PISO_MS) {
+    console.warn(`[workbook] recuperar-acesso estourou o piso de tempo (${decorridoMs}ms > ${PISO_MS}ms) — piso não está mascarando o timing`)
+  }
+  await dormir(Math.max(0, PISO_MS + randomInt(0, 150) - (Date.now() - t0)))
+  // resposta ÚNICA para sucesso, não-match e erro interno (ver cabeçalho)
+  return res.status(200).json(RESPOSTA_UNIFORME)
+})
+
+// JSON malformado no body não pode virar página de erro HTML do Express
+app.use('/api', (err, _req, res, next) => {
+  if (err?.type === 'entity.parse.failed' || err instanceof SyntaxError) {
+    return res.status(400).json({ ok: false, code: 'INVALID', mensagem: 'Corpo da requisição inválido.' })
+  }
+  next(err)
+})
 
 /*
   Headers de segurança. Importam desproporcionalmente aqui por causa do gerador
@@ -141,12 +406,16 @@ app.use((req, res, next) => {
   })
 })
 
-// Nunca deixar o processo morrer por erro não tratado (evita 503 cíclico).
-process.on('uncaughtException', (e) => console.error('[workbook] uncaughtException:', e))
-process.on('unhandledRejection', (e) => console.error('[workbook] unhandledRejection:', e))
+export { app }
 
-// Sobe já; se faltar build, dispara em background sem bloquear.
-ensureBuild()
-app.listen(PORT, HOST, () => {
-  console.log(`[workbook] no ar em http://${HOST}:${PORT} (distOk=${!!resolveDist()})`)
-})
+if (EH_MAIN) {
+  // Nunca deixar o processo morrer por erro não tratado (evita 503 cíclico).
+  process.on('uncaughtException', (e) => console.error('[workbook] uncaughtException:', e))
+  process.on('unhandledRejection', (e) => console.error('[workbook] unhandledRejection:', e))
+
+  // Sobe já; se faltar build, dispara em background sem bloquear.
+  ensureBuild()
+  app.listen(PORT, HOST, () => {
+    console.log(`[workbook] no ar em http://${HOST}:${PORT} (distOk=${!!resolveDist()})`)
+  })
+}

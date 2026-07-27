@@ -15,6 +15,12 @@
                      { id, label, tipo:'radio', opcoes:[...], obrigatoria, chart }
                    Salva no mesmo `answers` (id próprio). Só UM nível de
                    profundidade (uma sub-pergunta por opção-gatilho).
+   `ajuda`       = subtexto opcional exibido sob o label (contexto/exemplos).
+                   Não vai pro dashboard — é só apresentação.
+
+   INVARIANTES (2026-07-27): os `id` e as `opcoes` de campos chart:true são
+   contrato com o dashboard, o health.js e o CRM — NUNCA mudar. `label`,
+   `ajuda` e `placeholder` são livres.
    ============================================================ */
 export const SURVEY = [
   // 1. Profissão (era "área de atuação"). Opções fixas → gráfico + mapeia o
@@ -32,24 +38,27 @@ export const SURVEY = [
   // 3. Dificuldade profissional / carreira (aberta).
   { id: 'dificuldade', tipo: 'textarea', chart: false, obrigatoria: true,
     label: 'Qual é a maior dificuldade profissional que você enfrenta hoje?',
-    placeholder: 'Escreve com as suas palavras...' },
+    ajuda: 'Pode ser sobre clientes, honorários, rotina, posicionamento — o que mais pesa no seu dia a dia.',
+    placeholder: 'Escreva com as suas palavras...' },
 
   // 4. Obstáculo p/ tornar a holding familiar a PRINCIPAL área de atuação (aberta).
   // OPCIONAL (2026-07-26): reduzir atrito — só a 1ª aberta (dificuldade) é obrigatória.
   { id: 'dificuldade_holding_principal', tipo: 'textarea', chart: false, obrigatoria: false,
-    label: 'Que tipo de dificuldade ou obstáculo você acredita que pode ter para fazer o trabalho com Holding Familiar ser a sua principal área de atuação?',
-    placeholder: 'Escreve com as suas palavras... (opcional)' },
+    label: 'O que pode te impedir de fazer da Holding Familiar a sua principal área de atuação?',
+    ajuda: 'Dificuldade técnica, comercial, de tempo... o que vier primeiro à cabeça.',
+    placeholder: 'Escreva com as suas palavras...' },
 
   // 5. "Mundo dos sonhos": o que a carreira deveria entregar e ainda não entrega (aberta). OPCIONAL.
   { id: 'mundo_sonhos', tipo: 'textarea', chart: false, obrigatoria: false,
-    label: 'No seu mundo dos sonhos, o que você esperaria que a sua carreira estivesse te entregando e que ainda não está?',
-    placeholder: 'Escreve com as suas palavras... (opcional)' },
+    label: 'No seu mundo dos sonhos, o que a sua carreira estaria te entregando que ainda não entrega?',
+    ajuda: 'Renda, reconhecimento, liberdade de agenda — sonhe sem medo.',
+    placeholder: 'Escreva com as suas palavras...' },
 
   // 6. (antes do pitch) dificuldade percebida para COMEÇAR. Entra na varredura
   // de dor (nao_sabe_comecar). Fecha a pesquisa. OPCIONAL.
   { id: 'dificuldade_comecar', tipo: 'textarea', chart: false, obrigatoria: false,
     label: 'Qual dificuldade você acredita que terá para começar a trabalhar com Holding Familiar?',
-    placeholder: 'Escreve com as suas palavras... (opcional)' },
+    placeholder: 'Escreva com as suas palavras...' },
 ]
 
 export const SURVEY_CHART = SURVEY.filter((q) => q.chart)

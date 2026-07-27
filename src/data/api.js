@@ -19,10 +19,11 @@ const norm = (e) => (e || '').trim().toLowerCase()
 // --- cache de sessão (para currentUser() síncrono) ---
 let _session = null
 let _perfil = null // { nome, role }
+let _recovery = false // sessão veio de link de recuperação de senha?
 
 function setSession(session) {
   _session = session
-  if (!session) _perfil = null
+  if (!session) { _perfil = null; _recovery = false }
 }
 
 /**
@@ -32,8 +33,28 @@ function setSession(session) {
 export async function initAuth() {
   const { data } = await supabase.auth.getSession()
   setSession(data.session)
-  supabase.auth.onAuthStateChange((_evt, session) => setSession(session))
+  supabase.auth.onAuthStateChange((evt, session) => {
+    setSession(session)
+    if (evt === 'PASSWORD_RECOVERY') _recovery = true
+  })
   if (_session) await loadPerfil()
+}
+
+/**
+ * A sessão atual nasceu de um link de recuperação? Duas fontes, porque o
+ * evento PASSWORD_RECOVERY pode disparar antes de initAuth assinar o
+ * listener: (a) a flag do evento; (b) a claim `amr` do access token —
+ * link de recuperação autentica por otp/recovery, nunca por password.
+ * Fail-closed: na dúvida (token ilegível), NÃO é recovery.
+ */
+function sessaoDeRecovery() {
+  if (_recovery) return true
+  const token = _session?.access_token
+  if (!token) return false
+  try {
+    const payload = JSON.parse(atob(token.split('.')[1].replace(/-/g, '+').replace(/_/g, '/')))
+    return (payload.amr || []).some((m) => ['recovery', 'otp', 'magiclink'].includes(m?.method))
+  } catch { return false }
 }
 
 async function loadPerfil() {
@@ -117,17 +138,69 @@ export async function getLead(_email) {
 // ============================================================
 /**
  * login → { ok, code, surveyDone }
- * códigos de erro: NOT_REGISTERED | BAD_PASSWORD
+ * códigos de erro: NOT_REGISTERED | BAD_PASSWORD | INVALID
+ *
+ * ORÁCULO DE ENUMERAÇÃO (finding MÉDIO da auditoria de 26/07): distinguir
+ * NOT_REGISTERED de BAD_PASSWORD confirma para um atacante quem é aluno.
+ * A DECISÃO DE EXIBIÇÃO é de produto (João/F2) — por isso o comportamento
+ * atual fica preservado por default e a opção `generic: true` devolve o
+ * código único INVALID sem consultar a RPC email_eh_lead (nenhuma
+ * pré-checagem de existência). Quando a decisão sair, basta o front
+ * chamar login(email, senha, { generic: true }).
  */
-export async function login(email, password) {
+export async function login(email, password, { generic = false } = {}) {
   const e = norm(email)
   const { data, error } = await supabase.auth.signInWithPassword({ email: e, password })
   if (error) {
-    // distingue "e-mail não cadastrado no lançamento" de "senha errada"
+    if (generic) return { ok: false, code: 'INVALID' }
+    // legado: distingue "e-mail não cadastrado" de "senha errada" (oráculo)
     const ehLead = await isRegisteredLead(e)
     return { ok: false, code: ehLead ? 'BAD_PASSWORD' : 'NOT_REGISTERED' }
   }
   setSession(data.session)
+  await loadPerfil()
+  return { ok: true, surveyDone: await hasSurvey() }
+}
+
+/**
+ * recuperarAcesso — FLUXO NOVO de recuperação SEM e-mail (contrato em
+ * tmp/squad/extra-workbook.md): e-mail + telefone do cadastro + senha
+ * nova, numa tela só. Fala com POST /api/recuperar-acesso (Express).
+ *
+ * A resposta do servidor é UNIFORME de propósito (nunca diz se o e-mail
+ * existe ou se o telefone bateu) — o resultado real é descoberto AQUI,
+ * tentando logar com a senha nova. Em sucesso o aluno já sai LOGADO.
+ *
+ * Retorna { ok: true, surveyDone } logado, ou { ok: false, code }:
+ *   NO_MATCH   — dados não conferem com o cadastro (mensagem única:
+ *                "E-mail e WhatsApp não conferem com o cadastro.")
+ *   RATE_LIMIT — muitas tentativas; `retryAfterSeg` acompanha
+ *   INVALID    — formato inválido (senha < 8, e-mail/telefone malformado)
+ *   CONFIG     — servidor sem a chave admin configurada (avisar admin)
+ *   NETWORK    — sem conexão com o servidor
+ */
+export async function recuperarAcesso({ email, telefone, senha }) {
+  const e = norm(email)
+  let r
+  try {
+    r = await fetch('/api/recuperar-acesso', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email: e, telefone, senha }),
+    })
+  } catch { return { ok: false, code: 'NETWORK' } }
+
+  if (r.status === 429) {
+    const retryAfterSeg = Number(r.headers.get('Retry-After')) || 900
+    return { ok: false, code: 'RATE_LIMIT', retryAfterSeg }
+  }
+  if (r.status === 503) return { ok: false, code: 'CONFIG' }
+  if (!r.ok) return { ok: false, code: 'INVALID' }
+
+  // resposta 200 é opaca — o teste de verdade é conseguir entrar
+  const l = await supabase.auth.signInWithPassword({ email: e, password: senha })
+  if (l.error) return { ok: false, code: 'NO_MATCH' }
+  setSession(l.data.session)
   await loadPerfil()
   return { ok: true, surveyDone: await hasSurvey() }
 }
@@ -240,27 +313,39 @@ export async function changePassword(email, atual, nova) {
 }
 
 /**
- * requestReset — envia o e-mail nativo de redefinição do Supabase.
- * (não expõe mais link mock). Retorna { ok, code }.
+ * requestReset — LEGADO (fluxo por e-mail, substituído por recuperarAcesso).
+ * Envia o e-mail nativo de redefinição do Supabase e responde de forma
+ * UNIFORME: não pré-checa mais isRegisteredLead (era um oráculo de
+ * enumeração — finding MÉDIO da auditoria de 26/07) e devolve { ok: true }
+ * exista o e-mail ou não; o Supabase simplesmente não envia nada para
+ * e-mail desconhecido. Retorna { ok, code }.
  */
 export async function requestReset(email) {
   const e = norm(email)
-  if (!(await isRegisteredLead(e))) return { ok: false, code: 'NOT_REGISTERED' }
   const { error } = await supabase.auth.resetPasswordForEmail(e, {
     redirectTo: `${location.origin}${location.pathname}#/redefinir-senha`,
   })
-  if (error) return { ok: false, code: 'ERROR', message: error.message }
+  // erro de rede/serviço ainda é reportado; "e-mail não existe" não é erro
+  if (error && !/user|not.?found/i.test(error.message)) {
+    return { ok: false, code: 'ERROR', message: error.message }
+  }
   return { ok: true }
 }
 
 /**
- * resetPassword — no fluxo Supabase o usuário chega em /redefinir-senha
- * já com uma sessão de recovery (detectSessionInUrl). O token do link
- * é ignorado; apenas trocamos a senha do usuário atual.
+ * resetPassword — LEGADO (fluxo por e-mail). TRAVADO a sessões de
+ * recovery: antes trocava a senha de QUALQUER sessão ativa sem pedir a
+ * senha atual (CWE-620, finding MÉDIO da auditoria de 26/07 — sessão
+ * esquecida em máquina compartilhada virava tomada permanente da conta).
+ * Agora só age quando a sessão nasceu de link de recuperação; sessão
+ * comum deve usar changePassword (que revalida a senha atual).
+ * códigos de erro: NOT_RECOVERY | BAD_TOKEN
  */
 export async function resetPassword(_token, nova) {
+  if (!sessaoDeRecovery()) return { ok: false, code: 'NOT_RECOVERY' }
   const { error } = await supabase.auth.updateUser({ password: nova })
   if (error) return { ok: false, code: 'BAD_TOKEN', message: error.message }
+  _recovery = false // a troca consumiu a janela de recovery
   return { ok: true, email: currentUser() }
 }
 
@@ -322,20 +407,59 @@ async function ehDuplicado({ uid, email, telefone }) {
   } catch { return false }
 }
 
-/** getAllResults — admin only (RLS libera admin a ler todas). */
-export async function getAllResults() {
-  const { data, error } = await supabase
-    .from('respostas_pesquisa')
-    .select('email, nome, answers, criado_em, atualizado_em')
-    .order('atualizado_em', { ascending: false })
-  if (error) return []
-  // normaliza p/ o mesmo formato que Resultados.vue espera (ts + answers)
-  return (data || []).map((r) => ({
-    email: r.email,
-    nome: r.nome,
-    answers: r.answers || {},
-    ts: r.atualizado_em || r.criado_em,
-  }))
+// normaliza p/ o formato que Resultados.vue espera (ts + answers)
+const normalizarResultado = (r) => ({
+  email: r.email,
+  nome: r.nome,
+  answers: r.answers || {},
+  ts: r.atualizado_em || r.criado_em,
+})
+
+// ordenação ESTÁVEL: atualizado_em desc + user_id como desempate único —
+// sem desempate, linhas com o mesmo timestamp mudam de posição entre
+// páginas e registros somem/duplicam na paginação.
+const ordenarResultados = (q) =>
+  q.order('atualizado_em', { ascending: false, nullsFirst: false })
+    .order('user_id', { ascending: false })
+
+/**
+ * getResultsPage — leitura PAGINADA da base (admin; RLS libera admin).
+ * Preferir esta na UI: getAllResults carrega a base inteira em memória.
+ * → { ok, rows, total, page, pageSize } (rows no formato de Resultados.vue)
+ */
+export async function getResultsPage({ page = 0, pageSize = 100 } = {}) {
+  const tam = Math.min(Math.max(1, pageSize), 500) // teto por request
+  const de = Math.max(0, page) * tam
+  const { data, error, count } = await ordenarResultados(
+    supabase
+      .from('respostas_pesquisa')
+      .select('email, nome, answers, criado_em, atualizado_em', { count: 'exact' })
+  ).range(de, de + tam - 1)
+  if (error) return { ok: false, rows: [], total: 0, page, pageSize: tam, message: error.message }
+  return { ok: true, rows: (data || []).map(normalizarResultado), total: count ?? 0, page, pageSize: tam }
+}
+
+/**
+ * getAllResults — admin only (RLS libera admin a ler todas).
+ * COMPATÍVEL com a assinatura antiga (retorna o array completo), mas o
+ * fetch agora é em PÁGINAS de 1000 com ordenação estável — a versão
+ * anterior era uma query única sem limite (além de lenta, o PostgREST
+ * corta silenciosamente no max-rows do servidor). Teto duro de 20k
+ * linhas para nunca estourar a memória do browser; acima disso a UI
+ * deve migrar para getResultsPage.
+ */
+export async function getAllResults({ maxLinhas = 20_000 } = {}) {
+  const PAGINA = 1000
+  const linhas = []
+  for (let de = 0; de < maxLinhas; de += PAGINA) {
+    const { data, error } = await ordenarResultados(
+      supabase.from('respostas_pesquisa').select('email, nome, answers, criado_em, atualizado_em')
+    ).range(de, de + PAGINA - 1)
+    if (error) return linhas.map(normalizarResultado) // devolve o que já veio
+    linhas.push(...(data || []))
+    if (!data || data.length < PAGINA) break
+  }
+  return linhas.map(normalizarResultado)
 }
 
 // ============================================================

@@ -7,8 +7,7 @@ import { currentUser, hasSurvey, isAdmin } from './data/api.js'
 import Login from './views/Login.vue'          // eager: 1ª tela do funil
 import Pesquisa from './views/Pesquisa.vue'    // eager: porta de entrada pública
 const CriarAcesso = () => import('./views/CriarAcesso.vue')
-const EsqueciSenha = () => import('./views/EsqueciSenha.vue')
-const RedefinirSenha = () => import('./views/RedefinirSenha.vue')
+const RecuperarAcesso = () => import('./views/RecuperarAcesso.vue')
 const Ambiente = () => import('./views/Ambiente.vue')
 const Workbook = () => import('./views/Workbook.vue')
 const Anotacoes = () => import('./views/Anotacoes.vue')
@@ -22,8 +21,15 @@ const routes = [
   { path: '/', name: 'ambiente', component: Ambiente, meta: { requiresAuth: true, requiresSurvey: true } },
   { path: '/login', name: 'login', component: Login },
   { path: '/criar-acesso', name: 'criar-acesso', component: CriarAcesso },
-  { path: '/esqueci-senha', name: 'esqueci', component: EsqueciSenha },
-  { path: '/redefinir-senha', name: 'redefinir', component: RedefinirSenha },
+  // Recuperação de acesso sem e-mail: e-mail + WhatsApp do cadastro + senha
+  // nova, numa tela só (decisão do João, 2026-07-27).
+  { path: '/recuperar-acesso', name: 'recuperar', component: RecuperarAcesso },
+  // Fluxo ANTIGO por e-mail — links já enviados a alunos não podem dar 404.
+  // O link de recovery do Supabase chega com o token no hash; ao redirecionar,
+  // o aluno simplesmente usa a tela nova (e-mail + WhatsApp), sem depender
+  // do token.
+  { path: '/esqueci-senha', redirect: { name: 'recuperar' } },
+  { path: '/redefinir-senha', redirect: { name: 'recuperar' } },
   // pesquisa é PÚBLICA: é a porta de entrada do funil (link compartilhável).
   // Lead novo responde aqui e ganha o acesso ao final. Aluno logado sem
   // pesquisa também cai aqui pelo gate (requiresSurvey).

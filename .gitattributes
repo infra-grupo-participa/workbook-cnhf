@@ -1,2 +1,4 @@
 # Preserva o build versionado sem conversão de fim de linha (byte-idêntico ao Vite).
 dist/** -text
+# Binários (PDFs servidos como download) nunca podem sofrer normalização de EOL.
+*.pdf binary

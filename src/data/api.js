@@ -179,14 +179,20 @@ export async function login(email, password, { generic = false } = {}) {
  *   CONFIG     — servidor sem a chave admin configurada (avisar admin)
  *   NETWORK    — sem conexão com o servidor
  */
-export async function recuperarAcesso({ email, telefone, senha }) {
+export async function recuperarAcesso({ email, telefone, senha, modo, nome, faturamento, area }) {
   const e = norm(email)
+  // dois caminhos: por WhatsApp (padrão) ou por dados do cadastro (nome +
+  // faturamento + área) para quem não lembra/trocou o número. O servidor
+  // responde de forma uniforme nos dois; o sucesso é descoberto no login abaixo.
+  const corpo = modo === 'dados'
+    ? { modo: 'dados', email: e, nome, faturamento, area, senha }
+    : { email: e, telefone, senha }
   let r
   try {
     r = await fetch('/api/recuperar-acesso', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ email: e, telefone, senha }),
+      body: JSON.stringify(corpo),
     })
   } catch { return { ok: false, code: 'NETWORK' } }
 

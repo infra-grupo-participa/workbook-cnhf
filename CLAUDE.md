@@ -18,7 +18,12 @@ arquitetural. Leia antes de mexer.
 3. **Central do aluno** (`/`) — home: retomada, progresso por capítulo, anotações.
 4. **Workbook** (`/workbook`) — o caderno. O aluno preenche **149 lacunas ao vivo,
    durante a aula**, enquanto o professor dita.
-5. **Recuperação** (`/recuperar-acesso`) — e-mail + WhatsApp do cadastro + senha nova.
+5. **Recuperação** (`/recuperar-acesso`) — dois caminhos, ambos SEM e-mail:
+   - **"Tenho o WhatsApp"** (padrão): e-mail + WhatsApp do cadastro + senha nova.
+   - **"Não lembro o WhatsApp"** (`modo:'dados'`): e-mail + nome completo +
+     profissão + faixa de faturamento (respostas de múltipla escolha da pesquisa,
+     que 100% dos alunos têm) + senha nova. Para quem trocou de número ou nunca
+     teve telefone gravado. Mesmo endpoint, mesma resposta uniforme + rate limit.
 
 O ponto crítico do produto é o **item 4**: se a persistência falhar durante uma aula
 ao vivo, o aluno perde a aula e não tem como recuperar. Confiabilidade ali não é
@@ -125,6 +130,17 @@ que o par conferiu. Há piso de tempo + jitter contra oráculo de timing.
 
 ### 8. PowerShell + `git commit -m` com here-string quebra
 Usar `git commit -F <arquivo>` para mensagens multi-linha.
+
+### 9. Recuperação exigir telefone que bate = beco sem saída
+Aluno sem telefone gravado (ou que trocou de número) não recuperava por WhatsApp
+E não conseguia recadastrar (e-mail já existe): só restava o monitor. Correções
+(2026-07-30): (a) **conciliação única** preencheu 54 dos 66 telefones faltantes a
+partir de `public.compradores`/`cs.contatos_evento`/`controle.lead_active` (migration
+`workbook_conciliar_telefones_recuperacao`, backup em
+`workbook.leads_bkp_recup_20260730`); (b) **2º caminho de recuperação por dados do
+cadastro** (nome+profissão+faturamento) para quem não tem/não lembra o número.
+Sem Resend/SMTP no projeto → recuperação por e-mail está fora; estes dois caminhos
+são autoatendimento puro, sem envio.
 
 ---
 

@@ -192,6 +192,46 @@ export function telefonesEquivalentes(a, b) {
   return umSemDdd && na.slice(-8) === nb.slice(-8)
 }
 
+// ---------- normalização de dados de identidade (recuperação por cadastro) ----------
+/**
+ * Forma canônica de um nome para comparação tolerante: minúsculas, sem acento,
+ * sem pontuação, espaços colapsados. "José  DA Silva." → "jose da silva".
+ * Assim o aluno recupera mesmo digitando com/sem acento ou caixa diferente,
+ * sem afrouxar a ponto de nomes distintos colidirem.
+ */
+export function normalizarNome(bruto) {
+  return String(bruto || '')
+    .normalize('NFD').replace(/\p{Diacritic}/gu, '') // tira acento (combining marks)
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]/g, ' ')                     // pontuação → espaço
+    .replace(/\s+/g, ' ')
+    .trim()
+}
+
+/**
+ * O nome digitado confere com o do cadastro? Exige igualdade da forma canônica
+ * OU que um seja contido no outro por TODAS as palavras (cobre quem cadastrou
+ * "Maria Santos" e digita "Maria de Fátima Santos", ou vice-versa) — desde que
+ * haja ao menos nome + sobrenome (2 palavras) para não casar por um só termo.
+ */
+export function nomesEquivalentes(a, b) {
+  const na = normalizarNome(a)
+  const nb = normalizarNome(b)
+  if (!na || !nb) return false
+  if (na === nb) return true
+  const pa = na.split(' ').filter(Boolean)
+  const pb = nb.split(' ').filter(Boolean)
+  if (pa.length < 2 || pb.length < 2) return false
+  const menor = pa.length <= pb.length ? pa : pb
+  const maiorSet = new Set(pa.length <= pb.length ? pb : pa)
+  return menor.every((w) => maiorSet.has(w))
+}
+
+/** Comparação exata de opção de múltipla escolha (trim, sem diferença de caixa). */
+export function opcaoIgual(a, b) {
+  return String(a || '').trim().toLowerCase() === String(b || '').trim().toLowerCase()
+}
+
 // ---------- rate limit em memória (ver LIMITAÇÃO no cabeçalho) ----------
 const RL = {
   janelaMs: Number(process.env.RL_JANELA_MS) || 15 * 60_000,
@@ -294,12 +334,51 @@ async function buscarTelefones(email) {
   return resultados.flat()
 }
 
+/**
+ * Dados de identidade em arquivo para o e-mail — usados no 2º caminho de
+ * recuperação (para quem não lembra/trocou o WhatsApp): o nome do perfil e as
+ * respostas de pesquisa `area` (profissão) e `faturamento`, ambas de múltipla
+ * escolha. O nome é buscado pelo user_id do Auth (perfis não tem coluna email);
+ * as respostas, por email. Erro de leitura não vira negação silenciosa: loga e
+ * segue (a comparação simplesmente não vai bater, resposta uniforme mantida).
+ */
+async function buscarIdentidade(email, usuario) {
+  const [perfil, respostas] = await Promise.all([
+    usuario?.id
+      ? admin.from('perfis').select('nome').eq('user_id', usuario.id).maybeSingle()
+          .then((r) => { if (r.error) console.error('[workbook] recuperar-acesso: falha lendo perfis:', r.error.message); return r.data })
+      : Promise.resolve(null),
+    admin.from('respostas_pesquisa').select('answers').eq('email', email)
+      .then((r) => { if (r.error) console.error('[workbook] recuperar-acesso: falha lendo respostas_pesquisa:', r.error.message); return r.data || [] }),
+  ])
+  const nomes = []
+  if (perfil?.nome) nomes.push(perfil.nome)
+  const areas = []
+  const faturamentos = []
+  for (const row of respostas) {
+    const a = row?.answers
+    if (a && typeof a === 'object') {
+      if (a.area) areas.push(a.area)
+      if (a.faturamento) faturamentos.push(a.faturamento)
+    }
+  }
+  return { nomes, areas, faturamentos }
+}
+
 app.post('/api/recuperar-acesso', express.json({ limit: '8kb' }), async (req, res) => {
   const t0 = Date.now()
   const ip = ipCliente(req)
   const email = String(req.body?.email || '').trim().toLowerCase()
-  const telefone = typeof req.body?.telefone === 'string' ? req.body.telefone : ''
   const senha = typeof req.body?.senha === 'string' ? req.body.senha : ''
+  // Dois caminhos de prova de identidade:
+  //  - 'telefone' (padrão): e-mail + WhatsApp do cadastro
+  //  - 'dados': para quem não lembra/trocou o número — e-mail + nome completo
+  //    + faturamento + área (respostas de múltipla escolha da pesquisa)
+  const modo = req.body?.modo === 'dados' ? 'dados' : 'telefone'
+  const telefone = typeof req.body?.telefone === 'string' ? req.body.telefone : ''
+  const nome = typeof req.body?.nome === 'string' ? req.body.nome : ''
+  const faturamento = typeof req.body?.faturamento === 'string' ? req.body.faturamento : ''
+  const area = typeof req.body?.area === 'string' ? req.body.area : ''
 
   // sem service_role: erro EXPLÍCITO, nunca degradar para "sempre nega"
   if (!admin) {
@@ -317,30 +396,52 @@ app.post('/api/recuperar-acesso', express.json({ limit: '8kb' }), async (req, re
   }
 
   // validação de formato — depende só do input, não do banco (não vaza estado)
+  const emailSenhaOk = EMAIL_RE.test(email) && email.length <= 254 && senha.length >= 8 && senha.length <= 72
   const digitos = telefone.replace(/\D+/g, '')
-  if (
-    !EMAIL_RE.test(email) || email.length > 254 ||
-    digitos.length < 8 || digitos.length > 13 ||
-    senha.length < 8 || senha.length > 72
-  ) {
-    auditar({ email, ip, resultado: 'invalido' })
-    return res.status(400).json({ ok: false, code: 'INVALID', mensagem: 'Dados inválidos. Confira e-mail, WhatsApp e a senha (mínimo 8 caracteres).' })
+  const formatoOk = modo === 'dados'
+    ? emailSenhaOk && normalizarNome(nome).split(' ').filter(Boolean).length >= 2
+        && !!faturamento && !!area && nome.length <= 120 && faturamento.length <= 60 && area.length <= 60
+    : emailSenhaOk && digitos.length >= 8 && digitos.length <= 13
+  if (!formatoOk) {
+    auditar({ email, ip, modo, resultado: 'invalido' })
+    const msg = modo === 'dados'
+      ? 'Dados inválidos. Confira e-mail, nome completo, faturamento, área e a senha (mínimo 8 caracteres).'
+      : 'Dados inválidos. Confira e-mail, WhatsApp e a senha (mínimo 8 caracteres).'
+    return res.status(400).json({ ok: false, code: 'INVALID', mensagem: msg })
   }
 
   let resultado = 'sem_match'
   let motivo = ''
   try {
-    // mesmas consultas, em paralelo, exista o e-mail ou não (uniformidade)
-    const [usuario, telefones] = await Promise.all([buscarUsuario(email), buscarTelefones(email)])
-    const confere = !!usuario && telefones.some((t) => telefonesEquivalentes(t, telefone))
+    // o usuário do Auth é comum aos dois modos; busca em paralelo com o resto
+    const usuario = await buscarUsuario(email)
+    let confere = false
+    if (modo === 'dados') {
+      const { nomes, areas, faturamentos } = await buscarIdentidade(email, usuario)
+      const nomeOk = nomes.some((n) => nomesEquivalentes(n, nome))
+      const areaOk = areas.some((a) => opcaoIgual(a, area))
+      const fatOk = faturamentos.some((f) => opcaoIgual(f, faturamento))
+      confere = !!usuario && nomeOk && areaOk && fatOk
+      if (!confere) {
+        motivo = !usuario ? 'email_nao_cadastrado'
+          : !nomes.length ? 'sem_identidade_no_cadastro'
+          : !nomeOk ? 'nome_nao_confere'
+          : !areaOk ? 'area_nao_confere'
+          : 'faturamento_nao_confere'
+      }
+    } else {
+      const telefones = await buscarTelefones(email)
+      confere = !!usuario && telefones.some((t) => telefonesEquivalentes(t, telefone))
+      if (!confere) {
+        motivo = !usuario ? 'email_nao_cadastrado'
+          : telefones.length === 0 ? 'sem_telefone_no_cadastro'
+          : 'telefone_nao_confere'
+      }
+    }
     if (confere) {
       const { error } = await admin.auth.admin.updateUserById(usuario.id, { password: senha })
       if (error) { resultado = 'erro'; motivo = error.message }
       else resultado = 'sucesso'
-    } else {
-      motivo = !usuario ? 'email_nao_cadastrado'
-        : telefones.length === 0 ? 'sem_telefone_no_cadastro'
-        : 'telefone_nao_confere'
     }
   } catch (e) {
     resultado = 'erro'
@@ -348,7 +449,7 @@ app.post('/api/recuperar-acesso', express.json({ limit: '8kb' }), async (req, re
   }
 
   const decorridoMs = Date.now() - t0
-  auditar({ email, ip, resultado, motivo, decorridoMs })
+  auditar({ email, ip, modo, resultado, motivo, decorridoMs })
   if (decorridoMs > PISO_MS) {
     console.warn(`[workbook] recuperar-acesso estourou o piso de tempo (${decorridoMs}ms > ${PISO_MS}ms) — piso não está mascarando o timing`)
   }

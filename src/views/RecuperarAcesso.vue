@@ -26,17 +26,34 @@ const LINK_SUPORTE = import.meta.env.VITE_LINK_SUPORTE || ''
 
 const router = useRouter()
 
+// Opções da pesquisa usadas como prova de identidade no 2º caminho. Precisam
+// bater com survey-schema.js (contrato com dashboard/health/CRM — não mudar aqui).
+const OPCOES_FATURAMENTO = ['Até R$ 5 mil', 'R$ 5 a 15 mil', 'R$ 15 a 30 mil', 'Acima de R$ 30 mil']
+const OPCOES_AREA = ['Advocacia', 'Contabilidade', 'Outra']
+
+// método de recuperação: 'telefone' (padrão) ou 'dados' (não lembra o WhatsApp)
+const metodo = ref('telefone')
+
 const email = ref('')
 const telefone = ref('')
+const nome = ref('')
+const faturamento = ref('')
+const area = ref('')
 const senha = ref('')
 const verSenha = ref(false)
-const erros = ref({ email: '', telefone: '', senha: '' })
+const erros = ref({ email: '', telefone: '', nome: '', faturamento: '', area: '', senha: '' })
 const falha = ref('')          // '' | 'DADOS' | 'RATE_LIMIT' | 'CONFIG' | 'NETWORK'
 const aguardeMin = ref(15)     // minutos sugeridos no rate limit (Retry-After)
 const enviando = ref(false)
 
 const emailRef = ref(null)
 onMounted(() => emailRef.value?.focus())
+
+function trocarMetodo(m) {
+  metodo.value = m
+  falha.value = ''
+  erros.value = { email: '', telefone: '', nome: '', faturamento: '', area: '', senha: '' }
+}
 
 // --- máscara de telefone: digitação vira (XX) XXXXX-XXXX; colagem em
 // qualquer formato é aceita (+55, espaços, pontos) — o +55 é descartado
@@ -69,20 +86,46 @@ const checarSenha = () => {
   if (senha.value.length < 8) return 'A nova senha precisa ter pelo menos 8 caracteres.'
   return ''
 }
+const checarNome = () => {
+  const n = String(nome.value || '').trim()
+  if (!n) return 'Informe o seu nome completo.'
+  if (n.split(/\s+/).filter(Boolean).length < 2) return 'Informe nome e sobrenome, como no cadastro.'
+  return ''
+}
+const checarFaturamento = () => (faturamento.value ? '' : 'Selecione a faixa que você informou.')
+const checarArea = () => (area.value ? '' : 'Selecione a sua profissão.')
 
 async function recuperar() {
   falha.value = ''
-  erros.value = { email: checarEmail(), telefone: checarTelefone(), senha: checarSenha() }
-  if (erros.value.email || erros.value.telefone || erros.value.senha) return
+  const porDados = metodo.value === 'dados'
+  erros.value = {
+    email: checarEmail(),
+    telefone: porDados ? '' : checarTelefone(),
+    nome: porDados ? checarNome() : '',
+    faturamento: porDados ? checarFaturamento() : '',
+    area: porDados ? checarArea() : '',
+    senha: checarSenha(),
+  }
+  if (erros.value.email || erros.value.telefone || erros.value.nome ||
+      erros.value.faturamento || erros.value.area || erros.value.senha) return
 
   enviando.value = true
   // A resposta do servidor é uniforme; recuperarAcesso descobre o resultado
   // real tentando o login com a senha nova e, em sucesso, JÁ deixa logado.
-  const r = await recuperarAcesso({
-    email: email.value.trim().toLowerCase(),
-    telefone: telefone.value.replace(/\D/g, ''),
-    senha: senha.value,
-  })
+  const r = await recuperarAcesso(porDados
+    ? {
+        modo: 'dados',
+        email: email.value.trim().toLowerCase(),
+        nome: nome.value.trim(),
+        faturamento: faturamento.value,
+        area: area.value,
+        senha: senha.value,
+      }
+    : {
+        email: email.value.trim().toLowerCase(),
+        telefone: telefone.value.replace(/\D/g, ''),
+        senha: senha.value,
+      })
   enviando.value = false
 
   if (r.ok) {
@@ -106,9 +149,26 @@ async function recuperar() {
       <div class="eyebrow" style="text-align:center">Ambiente do aluno</div>
       <h1>Recuperar meu acesso</h1>
       <p class="muted sub">
-        Sem e-mail de confirmação, sem espera: confirme o e-mail e o WhatsApp
-        que você informou na inscrição e crie uma senha nova agora.
+        <template v-if="metodo === 'telefone'">
+          Sem e-mail de confirmação, sem espera: confirme o e-mail e o WhatsApp
+          que você informou na inscrição e crie uma senha nova agora.
+        </template>
+        <template v-else>
+          Não lembra o WhatsApp? Sem problema. Confirme o e-mail e alguns dados
+          que você respondeu na inscrição e crie uma senha nova agora.
+        </template>
       </p>
+
+      <div class="metodos" role="tablist" aria-label="Como recuperar o acesso">
+        <button
+          type="button" class="metodo" role="tab" :aria-selected="metodo === 'telefone'"
+          :class="{ ativo: metodo === 'telefone' }" @click="trocarMetodo('telefone')"
+        >Tenho o WhatsApp</button>
+        <button
+          type="button" class="metodo" role="tab" :aria-selected="metodo === 'dados'"
+          :class="{ ativo: metodo === 'dados' }" @click="trocarMetodo('dados')"
+        >Não lembro o WhatsApp</button>
+      </div>
 
       <form class="form" novalidate @submit.prevent="recuperar">
         <label class="field" for="rec-email">
@@ -123,7 +183,7 @@ async function recuperar() {
           <small id="rec-email-erro" class="erro-campo" aria-live="polite">{{ erros.email }}</small>
         </label>
 
-        <label class="field" for="rec-tel">
+        <label v-if="metodo === 'telefone'" class="field" for="rec-tel">
           <span>WhatsApp do cadastro</span>
           <input
             id="rec-tel" type="tel" :value="telefone"
@@ -136,6 +196,47 @@ async function recuperar() {
           <small id="rec-tel-ajuda" class="ajuda-campo muted">O mesmo número que você informou ao responder a pesquisa.</small>
           <small id="rec-tel-erro" class="erro-campo" aria-live="polite">{{ erros.telefone }}</small>
         </label>
+
+        <template v-else>
+          <label class="field" for="rec-nome">
+            <span>Nome completo</span>
+            <input
+              id="rec-nome" type="text" v-model="nome"
+              placeholder="Como você se inscreveu" autocomplete="name"
+              :class="{ invalido: erros.nome }" :aria-invalid="!!erros.nome"
+              aria-describedby="rec-nome-erro"
+              @input="erros.nome = ''" @blur="erros.nome = checarNome()"
+            />
+            <small id="rec-nome-erro" class="erro-campo" aria-live="polite">{{ erros.nome }}</small>
+          </label>
+
+          <label class="field" for="rec-area">
+            <span>Sua profissão</span>
+            <select
+              id="rec-area" v-model="area"
+              :class="{ invalido: erros.area }" :aria-invalid="!!erros.area"
+              aria-describedby="rec-area-erro" @change="erros.area = ''"
+            >
+              <option value="" disabled>Selecione…</option>
+              <option v-for="op in OPCOES_AREA" :key="op" :value="op">{{ op }}</option>
+            </select>
+            <small id="rec-area-erro" class="erro-campo" aria-live="polite">{{ erros.area }}</small>
+          </label>
+
+          <label class="field" for="rec-fat">
+            <span>Faturamento mensal informado</span>
+            <select
+              id="rec-fat" v-model="faturamento"
+              :class="{ invalido: erros.faturamento }" :aria-invalid="!!erros.faturamento"
+              aria-describedby="rec-fat-ajuda rec-fat-erro" @change="erros.faturamento = ''"
+            >
+              <option value="" disabled>Selecione…</option>
+              <option v-for="op in OPCOES_FATURAMENTO" :key="op" :value="op">{{ op }}</option>
+            </select>
+            <small id="rec-fat-ajuda" class="ajuda-campo muted">A mesma faixa que você marcou na pesquisa de inscrição.</small>
+            <small id="rec-fat-erro" class="erro-campo" aria-live="polite">{{ erros.faturamento }}</small>
+          </label>
+        </template>
 
         <label class="field" for="rec-senha">
           <span>Nova senha</span>
@@ -158,17 +259,23 @@ async function recuperar() {
           <small id="rec-senha-erro" class="erro-campo" aria-live="polite">{{ erros.senha }}</small>
         </label>
 
-        <div v-if="falha === 'DADOS'" class="alert bad" role="alert">
+        <div v-if="falha === 'DADOS' && metodo === 'telefone'" class="alert bad" role="alert">
           <strong>E-mail e WhatsApp não conferem com o cadastro.</strong>
           Confira se são os mesmos que você informou na inscrição — se você tem
-          mais de um número, vale tentar o outro.
+          mais de um número, vale tentar o outro. Não lembra o número?
+          <button type="button" class="link comolink" @click="trocarMetodo('dados')">
+            Recupere pelos seus dados da inscrição.
+          </button>
+        </div>
+        <div v-else-if="falha === 'DADOS' && metodo === 'dados'" class="alert bad" role="alert">
+          <strong>Os dados não conferem com o seu cadastro.</strong>
+          Confira o e-mail, o nome completo (como se inscreveu), a profissão e a
+          faixa de faturamento que você marcou na pesquisa.
           <template v-if="LINK_SUPORTE">
-            Trocou de número? <a class="link" :href="LINK_SUPORTE" target="_blank" rel="noopener">Fale com o suporte</a>
-            para atualizar o seu cadastro.
+            Ainda sem sucesso? <a class="link" :href="LINK_SUPORTE" target="_blank" rel="noopener">Fale com o suporte</a>.
           </template>
           <template v-else>
-            Trocou de número? Fale com a equipe do curso no canal da sua turma
-            para atualizar o seu cadastro.
+            Ainda sem sucesso? Fale com a equipe do curso no canal da sua turma.
           </template>
         </div>
         <div v-else-if="falha === 'RATE_LIMIT'" class="alert warn" role="alert">
@@ -223,4 +330,29 @@ h1 { text-align: center; margin: 4px 0 6px; font-size: 23px; }
 .olho:hover { color: var(--ink); }
 
 .alert.bad .link { color: inherit; text-decoration: underline; }
+/* link textual dentro do alerta (botão que troca o método) */
+.comolink {
+  border: none; background: none; padding: 0; font: inherit; cursor: pointer;
+  color: inherit; text-decoration: underline;
+}
+
+/* seletor de método (segmented control) */
+.metodos {
+  display: flex; gap: 4px; margin: 0 0 18px;
+  background: var(--elev-1, rgba(127,127,127,.08));
+  border: 1px solid var(--line-soft, rgba(127,127,127,.18));
+  border-radius: var(--radius-sm, 10px); padding: 4px;
+}
+.metodo {
+  flex: 1; min-height: 40px; border: none; background: none; cursor: pointer;
+  border-radius: calc(var(--radius-sm, 10px) - 3px);
+  font-size: 13px; font-weight: 600; color: var(--ink-2);
+  transition: background .15s, color .15s;
+}
+.metodo:hover { color: var(--ink); }
+.metodo.ativo {
+  background: var(--bg, #fff); color: var(--ink);
+  box-shadow: 0 1px 2px rgba(0,0,0,.08);
+}
+:root[data-theme='dark'] .metodo.ativo { background: rgba(255,255,255,.10); }
 </style>

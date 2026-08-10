@@ -321,6 +321,44 @@ async function buscarUsuario(email) {
 }
 
 /**
+ * Resolve o e-mail do aluno a partir de um WhatsApp (identificador
+ * alternativo no /api/entrar: o aluno digita e-mail OU telefone).
+ *
+ * ⚠️ AMBIGUIDADE REAL, medida na base em 2026-08-10: 120 telefones
+ * aparecem em 2+ contas (118 com 2, 2 com 3) — casal/sócio que usou o
+ * mesmo número em cadastros diferentes. Se resolvêssemos para "o
+ * primeiro que achar", o aluno entraria NA CONTA DE OUTRA PESSOA.
+ * Por isso: telefone que aponta para mais de um e-mail é AMBÍGUO e não
+ * resolve — quem cair nesse caso entra pelo e-mail (mensagem específica).
+ *
+ * Retorna { email } | { ambiguo: true } | { }.
+ */
+async function resolverEmailPorTelefone(telefone) {
+  const alvo = String(telefone || '').replace(/\D+/g, '')
+  if (alvo.length < 10) return {}
+
+  const fontes = ['leads', 'respostas_pesquisa']
+  const linhas = await Promise.all(fontes.map(async (tabela) => {
+    const { data, error } = await admin.from(tabela).select('email,telefone').not('telefone', 'is', null)
+    if (error) {
+      console.error(`[workbook] entrar: falha lendo ${tabela}:`, error.message)
+      return []
+    }
+    return data || []
+  }))
+
+  const emails = new Set()
+  for (const linha of linhas.flat()) {
+    if (linha?.email && telefonesEquivalentes(linha.telefone, alvo)) {
+      emails.add(String(linha.email).trim().toLowerCase())
+    }
+  }
+  if (emails.size === 0) return {}
+  if (emails.size > 1) return { ambiguo: true }
+  return { email: [...emails][0] }
+}
+
+/**
  * Telefones em arquivo para o e-mail: workbook.leads (gravado pelo trigger
  * no signUp) e workbook.respostas_pesquisa (informado na pesquisa).
  * Erro de schema/tabela NÃO vira negação silenciosa: loga alto e segue
@@ -484,7 +522,11 @@ app.post('/api/recuperar-acesso', express.json({ limit: '8kb' }), async (req, re
 app.post('/api/entrar', express.json({ limit: '8kb' }), async (req, res) => {
   const t0 = Date.now()
   const ip = ipCliente(req)
-  const email = String(req.body?.email || '').trim().toLowerCase()
+  // `identificador` (campo novo): o aluno digita e-mail OU WhatsApp e o
+  // outro campo confirma. `email` segue aceito para não quebrar chamadas antigas.
+  const identificador = String(req.body?.identificador || req.body?.email || '').trim()
+  const pareceEmail = identificador.includes('@')
+  let email = pareceEmail ? identificador.toLowerCase() : ''
   const modo = req.body?.modo === 'dados' ? 'dados' : 'telefone'
   const telefone = typeof req.body?.telefone === 'string' ? req.body.telefone : ''
   const nome = typeof req.body?.nome === 'string' ? req.body.nome : ''
@@ -502,6 +544,37 @@ app.post('/api/entrar', express.json({ limit: '8kb' }), async (req, res) => {
     auditar({ email, ip, evento: 'entrar', resultado: 'rate_limit', bloqueadoPorSeg: seg })
     return res.status(429).set('Retry-After', String(seg))
       .json({ ok: false, code: 'RATE_LIMIT', mensagem: 'Muitas tentativas. Aguarde alguns minutos e tente de novo.' })
+  }
+
+  // Identificador é telefone? Resolve para o e-mail antes de verificar.
+  // Feito DEPOIS do rate limit (não é trabalho gratuito para quem martela).
+  if (!pareceEmail) {
+    const alvo = identificador.replace(/\D+/g, '')
+    if (alvo.length >= 10) {
+      const r = await resolverEmailPorTelefone(alvo)
+      if (r.ambiguo) {
+        auditar({ ip, evento: 'entrar', resultado: 'tel_ambiguo' })
+        return res.status(200).json({
+          ok: false,
+          code: 'AMBIGUO',
+          mensagem: 'Esse WhatsApp está em mais de um cadastro. Entre com o seu e-mail para identificarmos a conta certa.',
+        })
+      }
+      if (r.email) email = r.email
+    }
+  }
+
+  // ⚠️ Entrar PELO telefone: o 2º campo (confirmação) tem que ser um dado
+  // DIFERENTE do identificador, senão o aluno "prova" a identidade com o
+  // mesmo dado que digitou — equivale a login de um fator só. Quem entra
+  // por telefone confirma pelos dados da pesquisa (modo 'dados').
+  if (!pareceEmail && modo !== 'dados') {
+    auditar({ email, ip, evento: 'entrar', resultado: 'tel_sem_2o_fator' })
+    return res.status(200).json({
+      ok: false,
+      code: 'PRECISA_EMAIL',
+      mensagem: 'Para entrar pelo WhatsApp, confirme também o seu nome, profissão e faixa de faturamento. Ou entre com o seu e-mail e o WhatsApp.',
+    })
   }
 
   // mesma validação de formato do outro endpoint, SEM o campo senha

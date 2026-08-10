@@ -225,11 +225,12 @@ export async function recuperarAcesso({ email, telefone, senha, modo, nome, fatu
  * Retorna { ok: true, surveyDone } já logado, ou { ok: false, code }:
  *   SEM_MATCH | RATE_LIMIT (+retryAfterSeg) | INVALID | CONFIG | NETWORK
  */
-export async function entrar({ email, telefone, modo, nome, faturamento, area }) {
-  const e = norm(email)
+export async function entrar({ email, identificador, telefone, modo, nome, faturamento, area }) {
+  // `identificador` aceita e-mail OU WhatsApp; `email` fica por compatibilidade
+  const id = String(identificador ?? email ?? '').trim()
   const corpo = modo === 'dados'
-    ? { modo: 'dados', email: e, nome, faturamento, area }
-    : { email: e, telefone }
+    ? { modo: 'dados', identificador: id, nome, faturamento, area }
+    : { identificador: id, telefone }
 
   let r
   try {
@@ -250,7 +251,10 @@ export async function entrar({ email, telefone, modo, nome, faturamento, area })
   let dados = null
   try { dados = await r.json() } catch { return { ok: false, code: 'NETWORK' } }
   if (!r.ok || !dados?.ok || !dados?.token_hash) {
-    return { ok: false, code: dados?.code === 'INVALID' ? 'INVALID' : 'SEM_MATCH', mensagem: dados?.mensagem }
+    // AMBIGUO (WhatsApp em mais de um cadastro) e PRECISA_EMAIL trazem
+    // orientação específica — repassar em vez de virar "não conferem".
+    const conhecido = ['INVALID', 'AMBIGUO', 'PRECISA_EMAIL'].includes(dados?.code)
+    return { ok: false, code: conhecido ? dados.code : 'SEM_MATCH', mensagem: dados?.mensagem }
   }
 
   // O servidor manda o `hashed_token` do GoTrue (não o action_link): o token

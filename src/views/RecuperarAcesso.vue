@@ -38,7 +38,8 @@ const nome = ref('')
 const faturamento = ref('')
 const area = ref('')
 const erros = ref({ email: '', telefone: '', nome: '', faturamento: '', area: '', senha: '' })
-const falha = ref('')          // '' | 'DADOS' | 'RATE_LIMIT' | 'CONFIG' | 'NETWORK'
+const falha = ref('')          // '' | 'DADOS' | 'ORIENTACAO' | 'RATE_LIMIT' | 'CONFIG' | 'NETWORK'
+const orientacao = ref('')     // mensagem vinda do servidor (AMBIGUO / PRECISA_EMAIL)
 const aguardeMin = ref(15)     // minutos sugeridos no rate limit (Retry-After)
 const enviando = ref(false)
 
@@ -65,10 +66,16 @@ function mascararTelefone(v) {
   return d.replace(/^(\d{2})(\d{5})(\d*)/, '($1) $2-$3')
 }
 
+// O 1º campo aceita e-mail OU WhatsApp — o aluno usa o que lembrar.
 const checarEmail = () => {
-  const e = String(email.value || '').trim().toLowerCase()
-  if (!e) return 'Informe o e-mail do seu cadastro.'
-  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(e)) return 'Informe um e-mail válido (ex.: nome@email.com).'
+  const v = String(email.value || '').trim()
+  if (!v) return 'Informe o e-mail ou o WhatsApp do seu cadastro.'
+  if (v.includes('@')) {
+    return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v.toLowerCase())
+      ? '' : 'Informe um e-mail válido (ex.: nome@email.com).'
+  }
+  const d = v.replace(/\D/g, '')
+  if (d.length < 10 || d.length > 13) return 'Informe um e-mail válido ou o WhatsApp com DDD.'
   return ''
 }
 const checarTelefone = () => {
@@ -105,13 +112,13 @@ async function recuperar() {
   const r = await entrar(porDados
     ? {
         modo: 'dados',
-        email: email.value.trim().toLowerCase(),
+        identificador: email.value.trim(),
         nome: nome.value.trim(),
         faturamento: faturamento.value,
         area: area.value,
       }
     : {
-        email: email.value.trim().toLowerCase(),
+        identificador: email.value.trim(),
         telefone: telefone.value.replace(/\D/g, ''),
       })
   enviando.value = false
@@ -126,7 +133,11 @@ async function recuperar() {
     falha.value = 'RATE_LIMIT'
   } else if (r.code === 'CONFIG') falha.value = 'CONFIG'
   else if (r.code === 'NETWORK') falha.value = 'NETWORK'
-  else falha.value = 'DADOS'
+  else if (r.code === 'AMBIGUO' || r.code === 'PRECISA_EMAIL') {
+    // orientação específica do servidor (WhatsApp repetido / falta 2º dado)
+    orientacao.value = r.mensagem || ''
+    falha.value = 'ORIENTACAO'
+  } else falha.value = 'DADOS'
 }
 </script>
 
@@ -160,10 +171,10 @@ async function recuperar() {
 
       <form class="form" novalidate @submit.prevent="recuperar">
         <label class="field" for="rec-email">
-          <span>E-mail do cadastro</span>
+          <span>E-mail ou WhatsApp do cadastro</span>
           <input
-            id="rec-email" ref="emailRef" type="email" v-model="email"
-            placeholder="voce@email.com" autocomplete="email" inputmode="email"
+            id="rec-email" ref="emailRef" type="text" v-model="email"
+            placeholder="voce@email.com ou (11) 98888-7777" autocomplete="email"
             :class="{ invalido: erros.email }" :aria-invalid="!!erros.email"
             aria-describedby="rec-email-erro"
             @input="erros.email = ''" @blur="erros.email = checarEmail()"
@@ -226,7 +237,10 @@ async function recuperar() {
           </label>
         </template>
 
-        <div v-if="falha === 'DADOS' && metodo === 'telefone'" class="alert bad" role="alert">
+        <div v-if="falha === 'ORIENTACAO'" class="alert warn" role="alert">
+          {{ orientacao }}
+        </div>
+        <div v-else-if="falha === 'DADOS' && metodo === 'telefone'" class="alert bad" role="alert">
           <strong>E-mail e WhatsApp não conferem com o cadastro.</strong>
           Confira se são os mesmos que você informou na inscrição — se você tem
           mais de um número, vale tentar o outro. Não lembra o número?

@@ -249,19 +249,13 @@ export async function entrar({ email, telefone, modo, nome, faturamento, area })
   // ATENÇÃO: fetch não lança em erro HTTP — checar o corpo, não só o status.
   let dados = null
   try { dados = await r.json() } catch { return { ok: false, code: 'NETWORK' } }
-  if (!r.ok || !dados?.ok || !dados?.link) {
+  if (!r.ok || !dados?.ok || !dados?.token_hash) {
     return { ok: false, code: dados?.code === 'INVALID' ? 'INVALID' : 'SEM_MATCH', mensagem: dados?.mensagem }
   }
 
-  // o action_link traz o token_hash na query; consumimos sem sair da SPA
-  let tokenHash = ''
-  try {
-    const u = new URL(dados.link)
-    tokenHash = u.searchParams.get('token_hash') || u.searchParams.get('token') || ''
-  } catch { /* link malformado cai no fallback abaixo */ }
-  if (!tokenHash) return { ok: false, code: 'SEM_MATCH' }
-
-  const v = await supabase.auth.verifyOtp({ type: 'magiclink', token_hash: tokenHash })
+  // O servidor manda o `hashed_token` do GoTrue (não o action_link): o token
+  // da querystring do link é o BRUTO e o verify responde 403 otp_expired.
+  const v = await supabase.auth.verifyOtp({ type: 'magiclink', token_hash: dados.token_hash })
   if (v.error || !v.data?.session) return { ok: false, code: 'SEM_MATCH' }
 
   setSession(v.data.session)

@@ -137,6 +137,11 @@ app.get('/health', (_req, res) =>
 
 const SUPABASE_URL_SRV =
   (process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL || 'https://mbvybujpkwuorhtdzcde.supabase.co').replace(/\/+$/, '')
+
+// domínio do próprio workbook (o action_link do GoTrue herda um redirect_to
+// da config do projeto que aponta para OUTRO sistema — ver /api/entrar)
+const BASE_URL_APP =
+  (process.env.WORKBOOK_BASE_URL || 'https://workbook.cursoholding.com.br').replace(/\/+$/, '')
 const SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || ''
 
 if (!SERVICE_ROLE_KEY) {
@@ -545,13 +550,25 @@ app.post('/api/entrar', express.json({ limit: '8kb' }), async (req, res) => {
 
     if (confere) {
       // magiclink: o GoTrue devolve o action_link mesmo sem SMTP configurado
-      const { data, error } = await admin.auth.admin.generateLink({ type: 'magiclink', email })
-      const action = data?.properties?.action_link || ''
-      if (error || !action) {
+      // Devolvemos o hashed_token, NÃO o action_link. Dois motivos, ambos
+      // descobertos testando em produção (2026-08-10):
+      //  1. o `token` da querystring do action_link é o token BRUTO; o
+      //     endpoint /auth/v1/verify (e o verifyOtp do supabase-js) espera o
+      //     `token_hash`. Mandar o bruto devolve 403 otp_expired.
+      //  2. o action_link carrega um `redirect_to` herdado da config do
+      //     projeto (apontava para o domínio do SIP) — irrelevante aqui,
+      //     já que consumimos o token sem navegar.
+      const { data, error } = await admin.auth.admin.generateLink({
+        type: 'magiclink',
+        email,
+        options: { redirectTo: `${BASE_URL_APP}/` },
+      })
+      const hashed = data?.properties?.hashed_token || ''
+      if (error || !hashed) {
         resultado = 'erro'
-        motivo = error?.message || 'sem action_link'
+        motivo = error?.message || 'sem hashed_token'
       } else {
-        link = action
+        link = hashed
         resultado = 'sucesso'
       }
     }
@@ -564,7 +581,8 @@ app.post('/api/entrar', express.json({ limit: '8kb' }), async (req, res) => {
   auditar({ email, ip, evento: 'entrar', modo, resultado, motivo, decorridoMs })
 
   if (resultado === 'sucesso') {
-    return res.status(200).json({ ok: true, link })
+    // `token_hash`: o front troca por sessão com verifyOtp, sem navegar
+    return res.status(200).json({ ok: true, token_hash: link })
   }
   // não-match e erro interno respondem igual (não distinguir os dois)
   return res.status(200).json({

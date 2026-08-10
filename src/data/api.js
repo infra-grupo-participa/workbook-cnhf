@@ -212,6 +212,64 @@ export async function recuperarAcesso({ email, telefone, senha, modo, nome, fatu
 }
 
 /**
+ * entrar — LOGIN SEM SENHA (decisão do Marcio, 2026-08-10).
+ *
+ * O aluno não tem mais senha: prova identidade com e-mail + WhatsApp do
+ * cadastro (ou e-mail + nome/profissão/faturamento da pesquisa) e o
+ * servidor devolve um magic link do GoTrue, que trocamos por sessão aqui.
+ *
+ * Por que `verifyOtp` e não abrir o link: navegar para o action_link faria
+ * o browser sair da SPA e voltar por redirect, perdendo o estado. O token
+ * do link é consumido direto — mesmo efeito, sem round-trip visível.
+ *
+ * Retorna { ok: true, surveyDone } já logado, ou { ok: false, code }:
+ *   SEM_MATCH | RATE_LIMIT (+retryAfterSeg) | INVALID | CONFIG | NETWORK
+ */
+export async function entrar({ email, telefone, modo, nome, faturamento, area }) {
+  const e = norm(email)
+  const corpo = modo === 'dados'
+    ? { modo: 'dados', email: e, nome, faturamento, area }
+    : { email: e, telefone }
+
+  let r
+  try {
+    r = await fetch('/api/entrar', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(corpo),
+    })
+  } catch { return { ok: false, code: 'NETWORK' } }
+
+  if (r.status === 429) {
+    const retryAfterSeg = Number(r.headers.get('Retry-After')) || 900
+    return { ok: false, code: 'RATE_LIMIT', retryAfterSeg }
+  }
+  if (r.status === 503) return { ok: false, code: 'CONFIG' }
+
+  // ATENÇÃO: fetch não lança em erro HTTP — checar o corpo, não só o status.
+  let dados = null
+  try { dados = await r.json() } catch { return { ok: false, code: 'NETWORK' } }
+  if (!r.ok || !dados?.ok || !dados?.link) {
+    return { ok: false, code: dados?.code === 'INVALID' ? 'INVALID' : 'SEM_MATCH', mensagem: dados?.mensagem }
+  }
+
+  // o action_link traz o token_hash na query; consumimos sem sair da SPA
+  let tokenHash = ''
+  try {
+    const u = new URL(dados.link)
+    tokenHash = u.searchParams.get('token_hash') || u.searchParams.get('token') || ''
+  } catch { /* link malformado cai no fallback abaixo */ }
+  if (!tokenHash) return { ok: false, code: 'SEM_MATCH' }
+
+  const v = await supabase.auth.verifyOtp({ type: 'magiclink', token_hash: tokenHash })
+  if (v.error || !v.data?.session) return { ok: false, code: 'SEM_MATCH' }
+
+  setSession(v.data.session)
+  await loadPerfil()
+  return { ok: true, surveyDone: await hasSurvey() }
+}
+
+/**
  * Auto-cadastro por convite. Cria o usuário no Auth com metadata
  * sistema='workbook' (o trigger cria perfil + lead com nome/profissao/telefone).
  * Retorna { ok, code, needsConfirm }.

@@ -12,9 +12,7 @@
 import { ref, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import LogoCNHF from '../components/LogoCNHF.vue'
-import Eye from '@lucide/vue/dist/esm/icons/eye.mjs'
-import EyeOff from '@lucide/vue/dist/esm/icons/eye-off.mjs'
-import { recuperarAcesso } from '../data/api.js'
+import { entrar } from '../data/api.js'
 
 // Canal de suporte para quem trocou de número (preencher quando a equipe
 // definir o link — ex.: 'https://wa.me/55...'). Vazio → orientação em texto.
@@ -39,8 +37,6 @@ const telefone = ref('')
 const nome = ref('')
 const faturamento = ref('')
 const area = ref('')
-const senha = ref('')
-const verSenha = ref(false)
 const erros = ref({ email: '', telefone: '', nome: '', faturamento: '', area: '', senha: '' })
 const falha = ref('')          // '' | 'DADOS' | 'RATE_LIMIT' | 'CONFIG' | 'NETWORK'
 const aguardeMin = ref(15)     // minutos sugeridos no rate limit (Retry-After)
@@ -81,11 +77,6 @@ const checarTelefone = () => {
   if (d.length < 10 || d.length > 11) return 'Informe o DDD + número completo.'
   return ''
 }
-const checarSenha = () => {
-  if (!senha.value) return 'Crie a sua nova senha.'
-  if (senha.value.length < 8) return 'A nova senha precisa ter pelo menos 8 caracteres.'
-  return ''
-}
 const checarNome = () => {
   const n = String(nome.value || '').trim()
   if (!n) return 'Informe o seu nome completo.'
@@ -104,27 +95,24 @@ async function recuperar() {
     nome: porDados ? checarNome() : '',
     faturamento: porDados ? checarFaturamento() : '',
     area: porDados ? checarArea() : '',
-    senha: checarSenha(),
+    senha: '',   // SEM SENHA: o aluno entra provando identidade (2026-08-10)
   }
   if (erros.value.email || erros.value.telefone || erros.value.nome ||
-      erros.value.faturamento || erros.value.area || erros.value.senha) return
+      erros.value.faturamento || erros.value.area) return
 
   enviando.value = true
-  // A resposta do servidor é uniforme; recuperarAcesso descobre o resultado
-  // real tentando o login com a senha nova e, em sucesso, JÁ deixa logado.
-  const r = await recuperarAcesso(porDados
+  // entrar() prova a identidade no servidor e troca o magic link por sessão.
+  const r = await entrar(porDados
     ? {
         modo: 'dados',
         email: email.value.trim().toLowerCase(),
         nome: nome.value.trim(),
         faturamento: faturamento.value,
         area: area.value,
-        senha: senha.value,
       }
     : {
         email: email.value.trim().toLowerCase(),
         telefone: telefone.value.replace(/\D/g, ''),
-        senha: senha.value,
       })
   enviando.value = false
 
@@ -138,7 +126,7 @@ async function recuperar() {
     falha.value = 'RATE_LIMIT'
   } else if (r.code === 'CONFIG') falha.value = 'CONFIG'
   else if (r.code === 'NETWORK') falha.value = 'NETWORK'
-  else falha.value = 'DADOS'   // NO_MATCH e INVALID: mensagem única (sem oráculo)
+  else falha.value = 'DADOS'
 }
 </script>
 
@@ -147,15 +135,15 @@ async function recuperar() {
     <div class="card box">
       <div class="brand"><LogoCNHF :height="44" /></div>
       <div class="eyebrow" style="text-align:center">Ambiente do aluno</div>
-      <h1>Recuperar meu acesso</h1>
+      <h1>Entrar no meu workbook</h1>
       <p class="muted sub">
         <template v-if="metodo === 'telefone'">
-          Sem e-mail de confirmação, sem espera: confirme o e-mail e o WhatsApp
-          que você informou na inscrição e crie uma senha nova agora.
+          Você não precisa de senha. Confirme o e-mail e o WhatsApp que informou
+          na inscrição e entre direto.
         </template>
         <template v-else>
           Não lembra o WhatsApp? Sem problema. Confirme o e-mail e alguns dados
-          que você respondeu na inscrição e crie uma senha nova agora.
+          que você respondeu na inscrição e entre direto.
         </template>
       </p>
 
@@ -238,27 +226,6 @@ async function recuperar() {
           </label>
         </template>
 
-        <label class="field" for="rec-senha">
-          <span>Nova senha</span>
-          <span class="senha-wrap">
-            <input
-              id="rec-senha" :type="verSenha ? 'text' : 'password'" v-model="senha"
-              placeholder="mínimo 8 caracteres" autocomplete="new-password"
-              :class="{ invalido: erros.senha }" :aria-invalid="!!erros.senha"
-              aria-describedby="rec-senha-erro"
-              @input="erros.senha = ''" @blur="erros.senha = checarSenha()"
-            />
-            <button
-              type="button" class="olho"
-              :aria-label="verSenha ? 'Ocultar senha' : 'Mostrar senha'"
-              :aria-pressed="verSenha" @click.prevent="verSenha = !verSenha"
-            >
-              <component :is="verSenha ? EyeOff : Eye" :size="18" :stroke-width="2" aria-hidden="true" />
-            </button>
-          </span>
-          <small id="rec-senha-erro" class="erro-campo" aria-live="polite">{{ erros.senha }}</small>
-        </label>
-
         <div v-if="falha === 'DADOS' && metodo === 'telefone'" class="alert bad" role="alert">
           <strong>E-mail e WhatsApp não conferem com o cadastro.</strong>
           Confira se são os mesmos que você informou na inscrição — se você tem
@@ -293,7 +260,7 @@ async function recuperar() {
         </div>
 
         <button class="btn primary block" :disabled="enviando">
-          {{ enviando ? 'Verificando...' : 'Criar nova senha e entrar' }}
+          {{ enviando ? 'Verificando...' : 'Entrar' }}
         </button>
       </form>
 

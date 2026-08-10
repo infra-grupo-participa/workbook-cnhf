@@ -458,6 +458,124 @@ app.post('/api/recuperar-acesso', express.json({ limit: '8kb' }), async (req, re
   return res.status(200).json(RESPOSTA_UNIFORME)
 })
 
+// ============================================================
+// POST /api/entrar — LOGIN SEM SENHA (decisão do Marcio, 2026-08-10)
+// ------------------------------------------------------------
+// O aluno NÃO tem mais senha. Prova identidade com e-mail + WhatsApp do
+// cadastro (ou e-mail + nome/profissão/faturamento da pesquisa) e recebe
+// um magic link do GoTrue, que o front troca por sessão.
+//
+// Reusa DELIBERADAMENTE a mesma verificação do /api/recuperar-acesso
+// (buscarUsuario/buscarTelefones/buscarIdentidade + normalizadores): a
+// regra de "quem é você" tem que ser UMA só — duas cópias divergem.
+//
+// Diferenças de segurança em relação ao endpoint acima:
+//  - NÃO usa resposta uniforme: aqui o front precisa do link para logar.
+//    O oráculo que isso abre (descobrir se um e-mail é cadastrado) já
+//    existe hoje via `email_eh_lead` (ver "Pendências" no CLAUDE.md), e
+//    sem retornar o link não há como entrar sem senha.
+//  - Mantidos: rate limit por IP+e-mail, auditoria e validação de formato.
+// ============================================================
+app.post('/api/entrar', express.json({ limit: '8kb' }), async (req, res) => {
+  const t0 = Date.now()
+  const ip = ipCliente(req)
+  const email = String(req.body?.email || '').trim().toLowerCase()
+  const modo = req.body?.modo === 'dados' ? 'dados' : 'telefone'
+  const telefone = typeof req.body?.telefone === 'string' ? req.body.telefone : ''
+  const nome = typeof req.body?.nome === 'string' ? req.body.nome : ''
+  const faturamento = typeof req.body?.faturamento === 'string' ? req.body.faturamento : ''
+  const area = typeof req.body?.area === 'string' ? req.body.area : ''
+
+  if (!admin) {
+    auditar({ email, ip, evento: 'entrar', resultado: 'config', motivo: 'SUPABASE_SERVICE_ROLE_KEY ausente' })
+    return res.status(503).json({ ok: false, code: 'CONFIG', mensagem: 'Entrada indisponível no momento.' })
+  }
+
+  const bloqueadoAte = limitar(ip, email)
+  if (bloqueadoAte) {
+    const seg = Math.ceil((bloqueadoAte - Date.now()) / 1000)
+    auditar({ email, ip, evento: 'entrar', resultado: 'rate_limit', bloqueadoPorSeg: seg })
+    return res.status(429).set('Retry-After', String(seg))
+      .json({ ok: false, code: 'RATE_LIMIT', mensagem: 'Muitas tentativas. Aguarde alguns minutos e tente de novo.' })
+  }
+
+  // mesma validação de formato do outro endpoint, SEM o campo senha
+  const emailOk = EMAIL_RE.test(email) && email.length <= 254
+  const digitos = telefone.replace(/\D+/g, '')
+  const formatoOk = modo === 'dados'
+    ? emailOk && normalizarNome(nome).split(' ').filter(Boolean).length >= 2
+        && !!faturamento && !!area && nome.length <= 120 && faturamento.length <= 60 && area.length <= 60
+    : emailOk && digitos.length >= 8 && digitos.length <= 13
+  if (!formatoOk) {
+    auditar({ email, ip, evento: 'entrar', modo, resultado: 'invalido' })
+    const msg = modo === 'dados'
+      ? 'Confira o e-mail, o nome completo, a profissão e a faixa de faturamento que você informou na pesquisa.'
+      : 'Confira o e-mail e o WhatsApp que você informou na pesquisa.'
+    return res.status(400).json({ ok: false, code: 'INVALID', mensagem: msg })
+  }
+
+  let resultado = 'sem_match'
+  let motivo = ''
+  let link = ''
+  try {
+    const usuario = await buscarUsuario(email)
+    let confere = false
+    if (modo === 'dados') {
+      const { nomes, areas, faturamentos } = await buscarIdentidade(email, usuario)
+      const nomeOk = nomes.some((n) => nomesEquivalentes(n, nome))
+      const areaOk = areas.some((a) => opcaoIgual(a, area))
+      const fatOk = faturamentos.some((f) => opcaoIgual(f, faturamento))
+      confere = !!usuario && nomeOk && areaOk && fatOk
+      if (!confere) {
+        motivo = !usuario ? 'email_nao_cadastrado'
+          : !nomes.length ? 'sem_identidade_no_cadastro'
+          : !nomeOk ? 'nome_nao_confere'
+          : !areaOk ? 'area_nao_confere'
+          : 'faturamento_nao_confere'
+      }
+    } else {
+      const telefones = await buscarTelefones(email)
+      confere = !!usuario && telefones.some((t) => telefonesEquivalentes(t, telefone))
+      if (!confere) {
+        motivo = !usuario ? 'email_nao_cadastrado'
+          : telefones.length === 0 ? 'sem_telefone_no_cadastro'
+          : 'telefone_nao_confere'
+      }
+    }
+
+    if (confere) {
+      // magiclink: o GoTrue devolve o action_link mesmo sem SMTP configurado
+      const { data, error } = await admin.auth.admin.generateLink({ type: 'magiclink', email })
+      const action = data?.properties?.action_link || ''
+      if (error || !action) {
+        resultado = 'erro'
+        motivo = error?.message || 'sem action_link'
+      } else {
+        link = action
+        resultado = 'sucesso'
+      }
+    }
+  } catch (e) {
+    resultado = 'erro'
+    motivo = String(e?.message || e)
+  }
+
+  const decorridoMs = Date.now() - t0
+  auditar({ email, ip, evento: 'entrar', modo, resultado, motivo, decorridoMs })
+
+  if (resultado === 'sucesso') {
+    return res.status(200).json({ ok: true, link })
+  }
+  // não-match e erro interno respondem igual (não distinguir os dois)
+  return res.status(200).json({
+    ok: false,
+    code: 'SEM_MATCH',
+    mensagem: modo === 'dados'
+      ? 'Não encontramos um cadastro com esses dados. Confira o e-mail, o nome, a profissão e o faturamento que você informou na pesquisa.'
+      : 'Não encontramos um cadastro com esse e-mail e WhatsApp. Confira os dados que você informou na pesquisa.',
+  })
+})
+
 // JSON malformado no body não pode virar página de erro HTML do Express
 app.use('/api', (err, _req, res, next) => {
   if (err?.type === 'entity.parse.failed' || err instanceof SyntaxError) {

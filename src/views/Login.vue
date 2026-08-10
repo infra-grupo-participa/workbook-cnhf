@@ -35,11 +35,15 @@ async function entrar() {
   carregando.value = false
   if (!r.ok) {
     if (MENSAGEM_UNICA_LOGIN) {
-      erro.value = 'E-mail ou senha incorretos. Se precisar, use "Esqueci minha senha".'
+      erro.value = 'E-mail ou senha incorretos. Você pode entrar sem senha no botão abaixo.'
     } else {
+      // NOT_REGISTERED aqui NÃO significa "não tem acesso": desde 10/08/2026 a
+      // base recebe conta por disparo e a maioria nunca criou senha. Mandar o
+      // aluno "conferir o e-mail" o faria desistir tendo acesso — o caminho
+      // certo é a entrada sem senha.
       erro.value = r.code === 'NOT_REGISTERED'
-        ? 'Não encontramos esse e-mail no cadastro do lançamento. Use o mesmo e-mail que você usou para se inscrever.'
-        : 'E-mail ou senha incorretos. Se precisar, use "Esqueci minha senha".'
+        ? 'Não encontramos uma senha para esse e-mail. Se você se inscreveu no curso, entre sem senha no botão abaixo.'
+        : 'E-mail ou senha incorretos. Você pode entrar sem senha no botão abaixo.'
     }
     return
   }
@@ -94,9 +98,20 @@ async function entrar() {
         </button>
       </form>
 
+      <!-- CAMINHO PRINCIPAL desde 10/08/2026: a base recebe acesso por disparo e
+           NUNCA teve senha. Quem nunca teve senha não clica em "esqueci minha
+           senha" — por isso a entrada sem senha vira o destaque, e a senha fica
+           como alternativa para quem já criou uma. -->
+      <div class="ou"><span>ou</span></div>
+
+      <router-link class="btn block secundario" :to="{ name: 'recuperar' }">
+        Entrar sem senha
+      </router-link>
+      <p class="ajuda muted">
+        Use o e-mail ou o WhatsApp que você informou na inscrição. Não precisa de senha.
+      </p>
+
       <div class="rodape">
-        <router-link class="link" :to="{ name: 'recuperar' }">Esqueci minha senha</router-link>
-        <span class="sep" aria-hidden="true">·</span>
         <router-link class="link" :to="{ name: 'pesquisa' }">Ainda não tenho acesso</router-link>
       </div>
     </div>
@@ -113,6 +128,19 @@ h1 { text-align: center; margin: 4px 0 2px; font-size: 24px; }
 .form { display: flex; flex-direction: column; gap: 14px; }
 .rodape { text-align: center; margin-top: 16px; display: flex; gap: 8px; justify-content: center; align-items: center; flex-wrap: wrap; }
 .sep { color: var(--ink-2); }
+
+/* separador "ou" entre o login por senha e a entrada sem senha */
+.ou { display: flex; align-items: center; gap: 12px; margin: 18px 0 14px; color: var(--ink-2); font-size: 13px; }
+.ou::before, .ou::after { content: ''; flex: 1; height: 1px; background: var(--line, rgba(128,128,128,.25)); }
+
+/* entrada sem senha: caminho principal de quem veio pelo disparo */
+.btn.secundario {
+  display: block; text-align: center; text-decoration: none;
+  background: transparent; border: 1px solid var(--accent, #e8590c);
+  color: var(--accent, #e8590c); font-weight: 600;
+}
+.btn.secundario:hover { background: var(--accent-soft, rgba(232,89,12,.08)); }
+.ajuda { text-align: center; font-size: 12.5px; line-height: 1.5; margin: 8px 0 0; }
 
 .senha-wrap { position: relative; display: block; }
 .senha-wrap input { padding-right: 52px; }

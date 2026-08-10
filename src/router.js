@@ -24,6 +24,9 @@ const routes = [
   // Recuperação de acesso sem e-mail: e-mail + WhatsApp do cadastro + senha
   // nova, numa tela só (decisão do João, 2026-07-27).
   { path: '/recuperar-acesso', name: 'recuperar', component: RecuperarAcesso },
+  // `/entrar` é a MESMA tela, com o nome que o aluno entende. O disparo aponta
+  // para cá: quem nunca teve senha não clica em "esqueci minha senha".
+  { path: '/entrar', redirect: { name: 'recuperar' } },
   // Fluxo ANTIGO por e-mail — links já enviados a alunos não podem dar 404.
   // O link de recovery do Supabase chega com o token no hash; ao redirecionar,
   // o aluno simplesmente usa a tela nova (e-mail + WhatsApp), sem depender

@@ -6,8 +6,7 @@ import { currentUser, hasSurvey, isAdmin } from './data/api.js'
 // workbook (~55 KB) nem o Resultados/admin até serem realmente acessados.
 import Login from './views/Login.vue'          // eager: 1ª tela do funil
 import Pesquisa from './views/Pesquisa.vue'    // eager: porta de entrada pública
-const CriarAcesso = () => import('./views/CriarAcesso.vue')
-const RecuperarAcesso = () => import('./views/RecuperarAcesso.vue')
+const AcessoInterno = () => import('./views/AcessoInterno.vue')
 const Ambiente = () => import('./views/Ambiente.vue')
 const Workbook = () => import('./views/Workbook.vue')
 const Anotacoes = () => import('./views/Anotacoes.vue')
@@ -20,19 +19,15 @@ const Resultados = () => import('./views/Resultados.vue')
 const routes = [
   { path: '/', name: 'ambiente', component: Ambiente, meta: { requiresAuth: true, requiresSurvey: true } },
   { path: '/login', name: 'login', component: Login },
-  { path: '/criar-acesso', name: 'criar-acesso', component: CriarAcesso },
-  // Recuperação de acesso sem e-mail: e-mail + WhatsApp do cadastro + senha
-  // nova, numa tela só (decisão do João, 2026-07-27).
-  { path: '/recuperar-acesso', name: 'recuperar', component: RecuperarAcesso },
-  // `/entrar` é a MESMA tela, com o nome que o aluno entende. O disparo aponta
-  // para cá: quem nunca teve senha não clica em "esqueci minha senha".
-  { path: '/entrar', redirect: { name: 'recuperar' } },
-  // Fluxo ANTIGO por e-mail — links já enviados a alunos não podem dar 404.
-  // O link de recovery do Supabase chega com o token no hash; ao redirecionar,
-  // o aluno simplesmente usa a tela nova (e-mail + WhatsApp), sem depender
-  // do token.
-  { path: '/esqueci-senha', redirect: { name: 'recuperar' } },
-  { path: '/redefinir-senha', redirect: { name: 'recuperar' } },
+  { path: '/acesso-interno', name: 'acesso-interno', component: AcessoInterno },
+  // LOGIN CRU (decisão do dono do produto, 2026-08-11): não há mais senha
+  // nem recuperação — os caminhos abaixo são redirects legados. Há disparo
+  // de WhatsApp NA RUA apontando para `/entrar` e `/recuperar-acesso`; se
+  // virarem 404, o aluno bate em parede. Mantidos por tempo indeterminado.
+  { path: '/entrar', redirect: { name: 'login' } },
+  { path: '/recuperar-acesso', redirect: { name: 'login' } },
+  { path: '/esqueci-senha', redirect: { name: 'login' } },
+  { path: '/redefinir-senha', redirect: { name: 'login' } },
   // pesquisa é PÚBLICA: é a porta de entrada do funil (link compartilhável).
   // Lead novo responde aqui e ganha o acesso ao final. Aluno logado sem
   // pesquisa também cai aqui pelo gate (requiresSurvey).

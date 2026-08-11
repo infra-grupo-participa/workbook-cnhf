@@ -1,7 +1,10 @@
 /* ============================================================
    SERVIDOR DE PRODUÇÃO — Workbook CNHF
    ------------------------------------------------------------
-   Serve o build (dist/) do Vite e faz o fallback de SPA.
+   Serve o build (dist/) do Vite, faz o fallback de SPA e expõe
+   POST /api/entrar — o LOGIN INTEIRO do aluno (login cru por e-mail,
+   sem senha). Sem SUPABASE_SERVICE_ROLE_KEY configurada, ninguém entra
+   no workbook: ver srvKey no /health.
 
    Robustez para Hostinger Node app: o processo pode ser reiniciado
    num contexto onde o dist/ ainda não está visível. Para nunca cair
@@ -20,7 +23,6 @@ import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
 import { existsSync } from 'node:fs'
 import { spawn } from 'node:child_process'
-import { randomInt } from 'node:crypto'
 import { createClient } from '@supabase/supabase-js'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
@@ -97,32 +99,32 @@ app.get('/health', (_req, res) =>
     distOk: !!resolveDist(),
     building,
     // diagnóstico de configuração — BOOLEANO, nunca o valor da chave.
-    // srvKey:false => /api/recuperar-acesso responde 503. Causas usuais:
-    // env não salva, nome diferente, ou app não reiniciado após salvar.
+    // srvKey:false => /api/entrar responde 503 => NINGUÉM consegue logar
+    // no workbook (é o login inteiro, não um endpoint secundário). Causas
+    // usuais: env não salva, nome diferente, ou app não reiniciado após salvar.
     srvKey: !!process.env.SUPABASE_SERVICE_ROLE_KEY,
     srvKeyLen: (process.env.SUPABASE_SERVICE_ROLE_KEY || '').length,
   })
 )
 
 // ============================================================
-// POST /api/recuperar-acesso — recuperação de acesso SEM e-mail
+// POST /api/entrar — LOGIN CRU por e-mail (decisão do Marcio, 2026-08-11)
 // ------------------------------------------------------------
-// O aluno deslogado informa e-mail + telefone do cadastro + nova
-// senha. Se (e-mail, telefone) conferirem com o cadastro, a senha é
-// trocada via service_role (Admin API do GoTrue). Decisão de produto
-// registrada em tmp/squad/extra-workbook.md (riscos aceitos).
+// O aluno deslogado informa SÓ o e-mail. Se o e-mail existe e não é de
+// admin, o servidor emite um magic link (Admin API do GoTrue) e o front
+// troca por sessão. Este é o LOGIN INTEIRO do sistema — não um endpoint
+// secundário: sem ele, nenhum aluno entra.
 //
 // Propriedades de segurança OBRIGATÓRIAS deste endpoint:
-//  1. RESPOSTA UNIFORME: sucesso, e-mail inexistente, telefone errado e
-//     até erro interno pós-validação devolvem o MESMO status (200) e o
-//     MESMO corpo. Um 500 só no caminho do update revelaria que o par
-//     (e-mail, telefone) confere — por isso erro interno também responde
-//     uniforme (fica só no log). O front descobre o resultado tentando
-//     logar com a senha nova.
-//  2. TEMPO CONSTANTE-ISH: todas as consultas rodam em paralelo nos dois
-//     caminhos e a resposta é segurada até um piso de tempo + jitter.
-//     Se o trabalho real estourar o piso, logamos aviso (observável).
-//  3. RATE LIMIT por IP e por e-mail com bloqueio progressivo.
+//  1. ENUMERAÇÃO ACEITA DE PROPÓSITO: e-mail inexistente devolve 404
+//     explícito (NAO_CADASTRADO), para o front oferecer a pesquisa a quem
+//     ainda não é aluno. A defesa aqui não é resposta uniforme — é o
+//     balde de rate limit `ip404` (item 3), que trava varredura de lista.
+//  2. VERIFICAÇÃO DE ADMIN SEMPRE ANTES DO LINK: e-mail com role='admin'
+//     em workbook.perfis nunca recebe magic link por este caminho (painel
+//     admin expõe a base inteira de respostas). Ver
+//     docs/sql/2026-08-11-acesso-por-email.sql.
+//  3. RATE LIMIT por IP, por e-mail e por IP+404, com bloqueio progressivo.
 //     LIMITAÇÃO CONHECIDA: o estado é EM MEMÓRIA — vale porque a
 //     Hostinger roda UM processo; com N processos/instâncias cada um
 //     teria contador próprio (multiplica o limite por N) e reiniciar o
@@ -130,9 +132,9 @@ app.get('/health', (_req, res) =>
 //     Redis/tabela.
 //  4. service_role SÓ AQUI, lida de env. Sem a env o endpoint responde
 //     503 explícito (nunca "sempre nega" silencioso) e o boot loga alto.
-//  5. AUDITORIA: toda tentativa vira uma linha [auditoria] no stdout
-//     (e-mail, IP, resultado, motivo, ms) — hoje não havia registro
-//     nenhum de troca de senha. (Follow-up: persistir em tabela.)
+//  5. AUDITORIA: toda tentativa vira uma linha [auditoria][entrar] no
+//     stdout (e-mail, IP, resultado, motivo). (Follow-up: persistir em
+//     tabela.)
 // ============================================================
 
 const SUPABASE_URL_SRV =
@@ -147,7 +149,7 @@ const SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || ''
 if (!SERVICE_ROLE_KEY) {
   console.error(
     '[workbook] ATENÇÃO: SUPABASE_SERVICE_ROLE_KEY ausente — ' +
-    'POST /api/recuperar-acesso vai responder 503 até a env ser configurada.'
+    'POST /api/entrar (o login inteiro) vai responder 503 até a env ser configurada.'
   )
 }
 
@@ -165,114 +167,46 @@ const admin = SERVICE_ROLE_KEY
     })
   : null
 
-// ---------- normalização de telefone (BR) ----------
-/**
- * Reduz um telefone brasileiro a uma forma canônica só-dígitos:
- * remove máscara, zeros de tronco ("011"), o +55 (sem confundir com o
- * DDD 55, que existe — só remove quando sobram >= 12 dígitos) e o
- * 9º dígito de celular (11 dígitos com "9" na 3ª posição → 10).
- * Ex.: "+55 (11) 98765-4321" → "1187654321".
- */
-export function normalizarTelefone(bruto) {
-  let d = String(bruto || '').replace(/\D+/g, '')
-  d = d.replace(/^0+/, '')                                  // 011 98765... → 11 98765...
-  if (d.length >= 12 && d.startsWith('55')) d = d.slice(2)  // +55 — mas nunca um DDD 55 sozinho
-  d = d.replace(/^0+/, '')                                  // "+55 011..." deixa 0 sobrando
-  if (d.length === 11 && d[2] === '9') d = d.slice(0, 2) + d.slice(3) // 9º dígito
-  return d
-}
-
-/**
- * O telefone digitado confere com o do cadastro? Compara as formas
- * canônicas; se um dos lados foi digitado SEM DDD (<= 9 dígitos),
- * compara os 8 dígitos finais. DDDs diferentes com mesmo número local
- * NÃO conferem (os dois lados com DDD exigem igualdade exata).
- */
-export function telefonesEquivalentes(a, b) {
-  const na = normalizarTelefone(a)
-  const nb = normalizarTelefone(b)
-  if (na.length < 8 || nb.length < 8) return false
-  if (na === nb) return true
-  const umSemDdd = na.length <= 9 || nb.length <= 9
-  return umSemDdd && na.slice(-8) === nb.slice(-8)
-}
-
-// ---------- normalização de dados de identidade (recuperação por cadastro) ----------
-/**
- * Forma canônica de um nome para comparação tolerante: minúsculas, sem acento,
- * sem pontuação, espaços colapsados. "José  DA Silva." → "jose da silva".
- * Assim o aluno recupera mesmo digitando com/sem acento ou caixa diferente,
- * sem afrouxar a ponto de nomes distintos colidirem.
- */
-export function normalizarNome(bruto) {
-  return String(bruto || '')
-    .normalize('NFD').replace(/\p{Diacritic}/gu, '') // tira acento (combining marks)
-    .toLowerCase()
-    .replace(/[^a-z0-9\s]/g, ' ')                     // pontuação → espaço
-    .replace(/\s+/g, ' ')
-    .trim()
-}
-
-/**
- * O nome digitado confere com o do cadastro? Exige igualdade da forma canônica
- * OU que um seja contido no outro por TODAS as palavras (cobre quem cadastrou
- * "Maria Santos" e digita "Maria de Fátima Santos", ou vice-versa) — desde que
- * haja ao menos nome + sobrenome (2 palavras) para não casar por um só termo.
- */
-export function nomesEquivalentes(a, b) {
-  const na = normalizarNome(a)
-  const nb = normalizarNome(b)
-  if (!na || !nb) return false
-  if (na === nb) return true
-  const pa = na.split(' ').filter(Boolean)
-  const pb = nb.split(' ').filter(Boolean)
-  if (pa.length < 2 || pb.length < 2) return false
-  const menor = pa.length <= pb.length ? pa : pb
-  const maiorSet = new Set(pa.length <= pb.length ? pb : pa)
-  return menor.every((w) => maiorSet.has(w))
-}
-
-/** Comparação exata de opção de múltipla escolha (trim, sem diferença de caixa). */
-export function opcaoIgual(a, b) {
-  return String(a || '').trim().toLowerCase() === String(b || '').trim().toLowerCase()
-}
-
 // ---------- rate limit em memória (ver LIMITAÇÃO no cabeçalho) ----------
 const RL = {
   janelaMs: Number(process.env.RL_JANELA_MS) || 15 * 60_000,
-  maxEmail: Number(process.env.RL_MAX_EMAIL) || 5,
-  maxIp: Number(process.env.RL_MAX_IP) || 20,
+  maxEmail: Number(process.env.RL_MAX_EMAIL) || 8,
+  maxIp: Number(process.env.RL_MAX_IP) || 12,
+  maxIp404: Number(process.env.RL_MAX_IP_404) || 5,
   bloqueioBaseMs: 15 * 60_000,
-  bloqueioMaxMs: 24 * 3_600_000,
+  bloqueioMaxMs: 4 * 3_600_000,
   maxChaves: 50_000, // teto duro de memória (~poucos MB)
   mapa: new Map(),   // chave → { hits: [ts], bloqueadoAte, violacoes }
 }
 
 /**
- * Registra a tentativa nas duas dimensões e devolve o timestamp até o qual
+ * Registra um hit numa única chave/balde e devolve o timestamp até o qual
  * está bloqueado (0 = passa). Bloqueio progressivo: cada estouro dobra a
- * duração (15min → 30 → 60 → ... → 24h).
+ * duração (15min → 30 → 60 → ... → 4h). Função de baixo nível — `limitar`
+ * cobre o caso padrão (IP + e-mail); baldes extras (ex.: ip404) chamam
+ * isto diretamente.
  */
-function limitar(ip, email) {
+function bater(chave, max) {
   const agora = Date.now()
-  let bloqueadoAte = 0
-  for (const { chave, max } of [
-    { chave: `ip:${ip}`, max: RL.maxIp },
-    { chave: `em:${email}`, max: RL.maxEmail },
-  ]) {
-    let r = RL.mapa.get(chave)
-    if (!r) { r = { hits: [], bloqueadoAte: 0, violacoes: 0 }; RL.mapa.set(chave, r) }
-    if (r.bloqueadoAte > agora) { bloqueadoAte = Math.max(bloqueadoAte, r.bloqueadoAte); continue }
-    r.hits = r.hits.filter((t) => agora - t < RL.janelaMs)
-    r.hits.push(agora)
-    if (r.hits.length > max) {
-      r.violacoes += 1
-      r.bloqueadoAte = agora + Math.min(RL.bloqueioBaseMs * 2 ** (r.violacoes - 1), RL.bloqueioMaxMs)
-      r.hits = []
-      bloqueadoAte = Math.max(bloqueadoAte, r.bloqueadoAte)
-    }
+  let r = RL.mapa.get(chave)
+  if (!r) { r = { hits: [], bloqueadoAte: 0, violacoes: 0 }; RL.mapa.set(chave, r) }
+  if (r.bloqueadoAte > agora) return r.bloqueadoAte
+  r.hits = r.hits.filter((t) => agora - t < RL.janelaMs)
+  r.hits.push(agora)
+  if (r.hits.length > max) {
+    r.violacoes += 1
+    r.bloqueadoAte = agora + Math.min(RL.bloqueioBaseMs * 2 ** (r.violacoes - 1), RL.bloqueioMaxMs)
+    r.hits = []
+    return r.bloqueadoAte
   }
-  return bloqueadoAte
+  return 0
+}
+
+/** Registra a tentativa nos baldes por IP e por e-mail; devolve o maior bloqueio. */
+function limitar(ip, email) {
+  const a = bater(`ip:${ip}`, RL.maxIp)
+  const b = bater(`em:${email}`, RL.maxEmail)
+  return Math.max(a, b)
 }
 
 // faxina periódica + teto duro (nunca crescer sem limite)
@@ -300,136 +234,38 @@ function ipCliente(req) {
 
 // ---------- helpers do handler ----------
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
-const RESPOSTA_UNIFORME = Object.freeze({
-  ok: true,
-  mensagem: 'Se os dados conferirem com o cadastro, sua senha foi atualizada. Entre com a nova senha.',
-})
-const PISO_MS = 1200 // > pior caso observado das chamadas ao Supabase
-
-const dormir = (ms) => new Promise((r) => setTimeout(r, ms))
 
 function auditar(evento) {
   // stdout = log da Node app na Hostinger. Follow-up: persistir em tabela.
-  console.log('[auditoria][recuperar-acesso]', JSON.stringify({ ts: new Date().toISOString(), ...evento }))
+  console.log('[auditoria][entrar]', JSON.stringify({ ts: new Date().toISOString(), ...evento }))
 }
 
-/** user do Auth por e-mail (via Admin API; generateLink não envia e-mail). */
-async function buscarUsuario(email) {
-  const { data, error } = await admin.auth.admin.generateLink({ type: 'recovery', email })
-  if (error) return null // "User not found" cai aqui — indistinguível na resposta
-  return data?.user || null
-}
-
-/**
- * Resolve o e-mail do aluno a partir de um WhatsApp (identificador
- * alternativo no /api/entrar: o aluno digita e-mail OU telefone).
- *
- * ⚠️ AMBIGUIDADE REAL, medida na base em 2026-08-10: 120 telefones
- * aparecem em 2+ contas (118 com 2, 2 com 3) — casal/sócio que usou o
- * mesmo número em cadastros diferentes. Se resolvêssemos para "o
- * primeiro que achar", o aluno entraria NA CONTA DE OUTRA PESSOA.
- * Por isso: telefone que aponta para mais de um e-mail é AMBÍGUO e não
- * resolve — quem cair nesse caso entra pelo e-mail (mensagem específica).
- *
- * Retorna { email } | { ambiguo: true } | { }.
- */
-async function resolverEmailPorTelefone(telefone) {
-  const alvo = String(telefone || '').replace(/\D+/g, '')
-  if (alvo.length < 10) return {}
-
-  const fontes = ['leads', 'respostas_pesquisa']
-  const linhas = await Promise.all(fontes.map(async (tabela) => {
-    const { data, error } = await admin.from(tabela).select('email,telefone').not('telefone', 'is', null)
-    if (error) {
-      console.error(`[workbook] entrar: falha lendo ${tabela}:`, error.message)
-      return []
-    }
-    return data || []
-  }))
-
-  const emails = new Set()
-  for (const linha of linhas.flat()) {
-    if (linha?.email && telefonesEquivalentes(linha.telefone, alvo)) {
-      emails.add(String(linha.email).trim().toLowerCase())
-    }
-  }
-  if (emails.size === 0) return {}
-  if (emails.size > 1) return { ambiguo: true }
-  return { email: [...emails][0] }
-}
-
-/**
- * Telefones em arquivo para o e-mail: workbook.leads (gravado pelo trigger
- * no signUp) e workbook.respostas_pesquisa (informado na pesquisa).
- * Erro de schema/tabela NÃO vira negação silenciosa: loga alto e segue
- * com a outra fonte.
- */
-async function buscarTelefones(email) {
-  const fontes = ['leads', 'respostas_pesquisa']
-  const resultados = await Promise.all(fontes.map(async (tabela) => {
-    const { data, error } = await admin.from(tabela).select('telefone').eq('email', email)
-    if (error) {
-      console.error(`[workbook] recuperar-acesso: falha lendo ${tabela}:`, error.message)
-      return []
-    }
-    return (data || []).map((r) => r.telefone).filter(Boolean)
-  }))
-  return resultados.flat()
-}
-
-/**
- * Dados de identidade em arquivo para o e-mail — usados no 2º caminho de
- * recuperação (para quem não lembra/trocou o WhatsApp): o nome do perfil e as
- * respostas de pesquisa `area` (profissão) e `faturamento`, ambas de múltipla
- * escolha. O nome é buscado pelo user_id do Auth (perfis não tem coluna email);
- * as respostas, por email. Erro de leitura não vira negação silenciosa: loga e
- * segue (a comparação simplesmente não vai bater, resposta uniforme mantida).
- */
-async function buscarIdentidade(email, usuario) {
-  const [perfil, respostas] = await Promise.all([
-    usuario?.id
-      ? admin.from('perfis').select('nome').eq('user_id', usuario.id).maybeSingle()
-          .then((r) => { if (r.error) console.error('[workbook] recuperar-acesso: falha lendo perfis:', r.error.message); return r.data })
-      : Promise.resolve(null),
-    admin.from('respostas_pesquisa').select('answers').eq('email', email)
-      .then((r) => { if (r.error) console.error('[workbook] recuperar-acesso: falha lendo respostas_pesquisa:', r.error.message); return r.data || [] }),
-  ])
-  const nomes = []
-  if (perfil?.nome) nomes.push(perfil.nome)
-  const areas = []
-  const faturamentos = []
-  for (const row of respostas) {
-    const a = row?.answers
-    if (a && typeof a === 'object') {
-      if (a.area) areas.push(a.area)
-      if (a.faturamento) faturamentos.push(a.faturamento)
-    }
-  }
-  return { nomes, areas, faturamentos }
-}
-
-app.post('/api/recuperar-acesso', express.json({ limit: '8kb' }), async (req, res) => {
-  const t0 = Date.now()
+// ============================================================
+// POST /api/entrar — LOGIN CRU por e-mail (decisão do Marcio, 2026-08-11)
+// ------------------------------------------------------------
+// O aluno digita SÓ o e-mail. Sem senha, sem WhatsApp, sem dados de
+// pesquisa: quem prova posse do e-mail é o magic link, não este endpoint.
+// Decisão de produto já tomada e reafirmada — não é para reabrir 2º fator.
+//
+// Exceção obrigatória: e-mail com role='admin' em workbook.perfis NÃO
+// entra por login cru (medido em 2026-08-11: 8196 alunos, 1 admin) — o
+// painel do admin expõe /resultado-das-pesquisas, as respostas de toda a
+// base. A checagem de admin roda ANTES de qualquer emissão de link.
+//
+// E-mail inexistente devolve 404 explícito (NAO_CADASTRADO): a enumeração
+// aqui é ACEITA de propósito, para o front oferecer a pesquisa a quem
+// ainda não é aluno. Ver docs/sql/2026-08-11-acesso-por-email.sql para a
+// RPC que resolve "existe"/"eh_admin" sem devolver mais nenhum dado.
+// ============================================================
+app.post('/api/entrar', express.json({ limit: '8kb' }), async (req, res) => {
   const ip = ipCliente(req)
   const email = String(req.body?.email || '').trim().toLowerCase()
-  const senha = typeof req.body?.senha === 'string' ? req.body.senha : ''
-  // Dois caminhos de prova de identidade:
-  //  - 'telefone' (padrão): e-mail + WhatsApp do cadastro
-  //  - 'dados': para quem não lembra/trocou o número — e-mail + nome completo
-  //    + faturamento + área (respostas de múltipla escolha da pesquisa)
-  const modo = req.body?.modo === 'dados' ? 'dados' : 'telefone'
-  const telefone = typeof req.body?.telefone === 'string' ? req.body.telefone : ''
-  const nome = typeof req.body?.nome === 'string' ? req.body.nome : ''
-  const faturamento = typeof req.body?.faturamento === 'string' ? req.body.faturamento : ''
-  const area = typeof req.body?.area === 'string' ? req.body.area : ''
 
-  // sem service_role: erro EXPLÍCITO, nunca degradar para "sempre nega"
   if (!admin) {
     auditar({ email, ip, resultado: 'config', motivo: 'SUPABASE_SERVICE_ROLE_KEY ausente' })
-    return res.status(503).json({ ok: false, code: 'CONFIG', mensagem: 'Recuperação de acesso indisponível no momento.' })
+    return res.status(503).json({ ok: false, code: 'CONFIG', mensagem: 'Entrada indisponível no momento.' })
   }
 
-  // rate limit ANTES de qualquer trabalho (conta inclusive tentativas inválidas)
   const bloqueadoAte = limitar(ip, email)
   if (bloqueadoAte) {
     const seg = Math.ceil((bloqueadoAte - Date.now()) / 1000)
@@ -438,233 +274,54 @@ app.post('/api/recuperar-acesso', express.json({ limit: '8kb' }), async (req, re
       .json({ ok: false, code: 'RATE_LIMIT', mensagem: 'Muitas tentativas. Aguarde alguns minutos e tente de novo.' })
   }
 
-  // validação de formato — depende só do input, não do banco (não vaza estado)
-  const emailSenhaOk = EMAIL_RE.test(email) && email.length <= 254 && senha.length >= 8 && senha.length <= 72
-  const digitos = telefone.replace(/\D+/g, '')
-  const formatoOk = modo === 'dados'
-    ? emailSenhaOk && normalizarNome(nome).split(' ').filter(Boolean).length >= 2
-        && !!faturamento && !!area && nome.length <= 120 && faturamento.length <= 60 && area.length <= 60
-    : emailSenhaOk && digitos.length >= 8 && digitos.length <= 13
-  if (!formatoOk) {
-    auditar({ email, ip, modo, resultado: 'invalido' })
-    const msg = modo === 'dados'
-      ? 'Dados inválidos. Confira e-mail, nome completo, faturamento, área e a senha (mínimo 8 caracteres).'
-      : 'Dados inválidos. Confira e-mail, WhatsApp e a senha (mínimo 8 caracteres).'
-    return res.status(400).json({ ok: false, code: 'INVALID', mensagem: msg })
+  if (!EMAIL_RE.test(email) || email.length > 254) {
+    auditar({ email, ip, resultado: 'invalido' })
+    return res.status(400).json({ ok: false, code: 'INVALID', mensagem: 'Digite um e-mail válido.' })
   }
 
-  let resultado = 'sem_match'
-  let motivo = ''
-  try {
-    // o usuário do Auth é comum aos dois modos; busca em paralelo com o resto
-    const usuario = await buscarUsuario(email)
-    let confere = false
-    if (modo === 'dados') {
-      const { nomes, areas, faturamentos } = await buscarIdentidade(email, usuario)
-      const nomeOk = nomes.some((n) => nomesEquivalentes(n, nome))
-      const areaOk = areas.some((a) => opcaoIgual(a, area))
-      const fatOk = faturamentos.some((f) => opcaoIgual(f, faturamento))
-      confere = !!usuario && nomeOk && areaOk && fatOk
-      if (!confere) {
-        motivo = !usuario ? 'email_nao_cadastrado'
-          : !nomes.length ? 'sem_identidade_no_cadastro'
-          : !nomeOk ? 'nome_nao_confere'
-          : !areaOk ? 'area_nao_confere'
-          : 'faturamento_nao_confere'
-      }
-    } else {
-      const telefones = await buscarTelefones(email)
-      confere = !!usuario && telefones.some((t) => telefonesEquivalentes(t, telefone))
-      if (!confere) {
-        motivo = !usuario ? 'email_nao_cadastrado'
-          : telefones.length === 0 ? 'sem_telefone_no_cadastro'
-          : 'telefone_nao_confere'
-      }
+  const { data, error: erroRpc } = await admin.rpc('acesso_por_email', { p_email: email })
+  if (erroRpc) {
+    // erro na consulta NUNCA vira "não cadastrado" — isso mascararia falha
+    // de banco como se o aluno não existisse.
+    auditar({ email, ip, resultado: 'erro', motivo: erroRpc.message })
+    return res.status(500).json({ ok: false, code: 'ERRO', mensagem: 'Não foi possível verificar seu acesso agora. Tente de novo em instantes.' })
+  }
+  const linha = Array.isArray(data) ? data[0] : data
+
+  if (!linha?.existe) {
+    // balde extra: só incrementa em NAO_CADASTRADO — defesa contra
+    // varredura de lista, já que a enumeração em si é aceita.
+    const bloqueado404 = bater(`ip404:${ip}`, RL.maxIp404)
+    if (bloqueado404) {
+      const seg = Math.ceil((bloqueado404 - Date.now()) / 1000)
+      auditar({ email, ip, resultado: 'rate_limit', bloqueadoPorSeg: seg, motivo: 'varredura_404' })
+      return res.status(429).set('Retry-After', String(seg))
+        .json({ ok: false, code: 'RATE_LIMIT', mensagem: 'Muitas tentativas. Aguarde alguns minutos e tente de novo.' })
     }
-    if (confere) {
-      const { error } = await admin.auth.admin.updateUserById(usuario.id, { password: senha })
-      if (error) { resultado = 'erro'; motivo = error.message }
-      else resultado = 'sucesso'
-    }
-  } catch (e) {
-    resultado = 'erro'
-    motivo = String(e?.message || e)
+    auditar({ email, ip, resultado: 'nao_cadastrado' })
+    return res.status(404).json({ ok: false, code: 'NAO_CADASTRADO', mensagem: 'Não encontramos um cadastro com esse e-mail.' })
   }
 
-  const decorridoMs = Date.now() - t0
-  auditar({ email, ip, modo, resultado, motivo, decorridoMs })
-  if (decorridoMs > PISO_MS) {
-    console.warn(`[workbook] recuperar-acesso estourou o piso de tempo (${decorridoMs}ms > ${PISO_MS}ms) — piso não está mascarando o timing`)
-  }
-  await dormir(Math.max(0, PISO_MS + randomInt(0, 150) - (Date.now() - t0)))
-  // resposta ÚNICA para sucesso, não-match e erro interno (ver cabeçalho)
-  return res.status(200).json(RESPOSTA_UNIFORME)
-})
-
-// ============================================================
-// POST /api/entrar — LOGIN SEM SENHA (decisão do Marcio, 2026-08-10)
-// ------------------------------------------------------------
-// O aluno NÃO tem mais senha. Prova identidade com e-mail + WhatsApp do
-// cadastro (ou e-mail + nome/profissão/faturamento da pesquisa) e recebe
-// um magic link do GoTrue, que o front troca por sessão.
-//
-// Reusa DELIBERADAMENTE a mesma verificação do /api/recuperar-acesso
-// (buscarUsuario/buscarTelefones/buscarIdentidade + normalizadores): a
-// regra de "quem é você" tem que ser UMA só — duas cópias divergem.
-//
-// Diferenças de segurança em relação ao endpoint acima:
-//  - NÃO usa resposta uniforme: aqui o front precisa do link para logar.
-//    O oráculo que isso abre (descobrir se um e-mail é cadastrado) já
-//    existe hoje via `email_eh_lead` (ver "Pendências" no CLAUDE.md), e
-//    sem retornar o link não há como entrar sem senha.
-//  - Mantidos: rate limit por IP+e-mail, auditoria e validação de formato.
-// ============================================================
-app.post('/api/entrar', express.json({ limit: '8kb' }), async (req, res) => {
-  const t0 = Date.now()
-  const ip = ipCliente(req)
-  // `identificador` (campo novo): o aluno digita e-mail OU WhatsApp e o
-  // outro campo confirma. `email` segue aceito para não quebrar chamadas antigas.
-  const identificador = String(req.body?.identificador || req.body?.email || '').trim()
-  const pareceEmail = identificador.includes('@')
-  let email = pareceEmail ? identificador.toLowerCase() : ''
-  const modo = req.body?.modo === 'dados' ? 'dados' : 'telefone'
-  const telefone = typeof req.body?.telefone === 'string' ? req.body.telefone : ''
-  const nome = typeof req.body?.nome === 'string' ? req.body.nome : ''
-  const faturamento = typeof req.body?.faturamento === 'string' ? req.body.faturamento : ''
-  const area = typeof req.body?.area === 'string' ? req.body.area : ''
-
-  if (!admin) {
-    auditar({ email, ip, evento: 'entrar', resultado: 'config', motivo: 'SUPABASE_SERVICE_ROLE_KEY ausente' })
-    return res.status(503).json({ ok: false, code: 'CONFIG', mensagem: 'Entrada indisponível no momento.' })
+  if (linha.eh_admin) {
+    // checagem de admin SEMPRE antes de emitir link — não emite magic link nenhum
+    auditar({ email, ip, resultado: 'admin_recusado' })
+    return res.status(403).json({ ok: false, code: 'ADMIN_PRECISA_SENHA', mensagem: 'Contas de administrador entram com senha, não pelo login por e-mail.' })
   }
 
-  const bloqueadoAte = limitar(ip, email)
-  if (bloqueadoAte) {
-    const seg = Math.ceil((bloqueadoAte - Date.now()) / 1000)
-    auditar({ email, ip, evento: 'entrar', resultado: 'rate_limit', bloqueadoPorSeg: seg })
-    return res.status(429).set('Retry-After', String(seg))
-      .json({ ok: false, code: 'RATE_LIMIT', mensagem: 'Muitas tentativas. Aguarde alguns minutos e tente de novo.' })
-  }
-
-  // Identificador é telefone? Resolve para o e-mail antes de verificar.
-  // Feito DEPOIS do rate limit (não é trabalho gratuito para quem martela).
-  if (!pareceEmail) {
-    const alvo = identificador.replace(/\D+/g, '')
-    if (alvo.length >= 10) {
-      const r = await resolverEmailPorTelefone(alvo)
-      if (r.ambiguo) {
-        auditar({ ip, evento: 'entrar', resultado: 'tel_ambiguo' })
-        return res.status(200).json({
-          ok: false,
-          code: 'AMBIGUO',
-          mensagem: 'Esse WhatsApp está em mais de um cadastro. Entre com o seu e-mail para identificarmos a conta certa.',
-        })
-      }
-      if (r.email) email = r.email
-    }
-  }
-
-  // ⚠️ Entrar PELO telefone: o 2º campo (confirmação) tem que ser um dado
-  // DIFERENTE do identificador, senão o aluno "prova" a identidade com o
-  // mesmo dado que digitou — equivale a login de um fator só. Quem entra
-  // por telefone confirma pelos dados da pesquisa (modo 'dados').
-  if (!pareceEmail && modo !== 'dados') {
-    auditar({ email, ip, evento: 'entrar', resultado: 'tel_sem_2o_fator' })
-    return res.status(200).json({
-      ok: false,
-      code: 'PRECISA_EMAIL',
-      mensagem: 'Para entrar pelo WhatsApp, confirme também o seu nome, profissão e faixa de faturamento. Ou entre com o seu e-mail e o WhatsApp.',
-    })
-  }
-
-  // mesma validação de formato do outro endpoint, SEM o campo senha
-  const emailOk = EMAIL_RE.test(email) && email.length <= 254
-  const digitos = telefone.replace(/\D+/g, '')
-  const formatoOk = modo === 'dados'
-    ? emailOk && normalizarNome(nome).split(' ').filter(Boolean).length >= 2
-        && !!faturamento && !!area && nome.length <= 120 && faturamento.length <= 60 && area.length <= 60
-    : emailOk && digitos.length >= 8 && digitos.length <= 13
-  if (!formatoOk) {
-    auditar({ email, ip, evento: 'entrar', modo, resultado: 'invalido' })
-    const msg = modo === 'dados'
-      ? 'Confira o e-mail, o nome completo, a profissão e a faixa de faturamento que você informou na pesquisa.'
-      : 'Confira o e-mail e o WhatsApp que você informou na pesquisa.'
-    return res.status(400).json({ ok: false, code: 'INVALID', mensagem: msg })
-  }
-
-  let resultado = 'sem_match'
-  let motivo = ''
-  let link = ''
-  try {
-    const usuario = await buscarUsuario(email)
-    let confere = false
-    if (modo === 'dados') {
-      const { nomes, areas, faturamentos } = await buscarIdentidade(email, usuario)
-      const nomeOk = nomes.some((n) => nomesEquivalentes(n, nome))
-      const areaOk = areas.some((a) => opcaoIgual(a, area))
-      const fatOk = faturamentos.some((f) => opcaoIgual(f, faturamento))
-      confere = !!usuario && nomeOk && areaOk && fatOk
-      if (!confere) {
-        motivo = !usuario ? 'email_nao_cadastrado'
-          : !nomes.length ? 'sem_identidade_no_cadastro'
-          : !nomeOk ? 'nome_nao_confere'
-          : !areaOk ? 'area_nao_confere'
-          : 'faturamento_nao_confere'
-      }
-    } else {
-      const telefones = await buscarTelefones(email)
-      confere = !!usuario && telefones.some((t) => telefonesEquivalentes(t, telefone))
-      if (!confere) {
-        motivo = !usuario ? 'email_nao_cadastrado'
-          : telefones.length === 0 ? 'sem_telefone_no_cadastro'
-          : 'telefone_nao_confere'
-      }
-    }
-
-    if (confere) {
-      // magiclink: o GoTrue devolve o action_link mesmo sem SMTP configurado
-      // Devolvemos o hashed_token, NÃO o action_link. Dois motivos, ambos
-      // descobertos testando em produção (2026-08-10):
-      //  1. o `token` da querystring do action_link é o token BRUTO; o
-      //     endpoint /auth/v1/verify (e o verifyOtp do supabase-js) espera o
-      //     `token_hash`. Mandar o bruto devolve 403 otp_expired.
-      //  2. o action_link carrega um `redirect_to` herdado da config do
-      //     projeto (apontava para o domínio do SIP) — irrelevante aqui,
-      //     já que consumimos o token sem navegar.
-      const { data, error } = await admin.auth.admin.generateLink({
-        type: 'magiclink',
-        email,
-        options: { redirectTo: `${BASE_URL_APP}/` },
-      })
-      const hashed = data?.properties?.hashed_token || ''
-      if (error || !hashed) {
-        resultado = 'erro'
-        motivo = error?.message || 'sem hashed_token'
-      } else {
-        link = hashed
-        resultado = 'sucesso'
-      }
-    }
-  } catch (e) {
-    resultado = 'erro'
-    motivo = String(e?.message || e)
-  }
-
-  const decorridoMs = Date.now() - t0
-  auditar({ email, ip, evento: 'entrar', modo, resultado, motivo, decorridoMs })
-
-  if (resultado === 'sucesso') {
-    // `token_hash`: o front troca por sessão com verifyOtp, sem navegar
-    return res.status(200).json({ ok: true, token_hash: link })
-  }
-  // não-match e erro interno respondem igual (não distinguir os dois)
-  return res.status(200).json({
-    ok: false,
-    code: 'SEM_MATCH',
-    mensagem: modo === 'dados'
-      ? 'Não encontramos um cadastro com esses dados. Confira o e-mail, o nome, a profissão e o faturamento que você informou na pesquisa.'
-      : 'Não encontramos um cadastro com esse e-mail e WhatsApp. Confira os dados que você informou na pesquisa.',
+  const { data: linkData, error: erroLink } = await admin.auth.admin.generateLink({
+    type: 'magiclink',
+    email,
+    options: { redirectTo: `${BASE_URL_APP}/` },
   })
+  const hashed = linkData?.properties?.hashed_token || ''
+  if (erroLink || !hashed) {
+    auditar({ email, ip, resultado: 'erro', motivo: erroLink?.message || 'sem hashed_token' })
+    return res.status(500).json({ ok: false, code: 'ERRO', mensagem: 'Não foi possível gerar seu acesso agora. Tente de novo em instantes.' })
+  }
+
+  auditar({ email, ip, resultado: 'sucesso' })
+  // `token_hash`: o front troca por sessão com verifyOtp, sem navegar
+  return res.status(200).json({ ok: true, token_hash: hashed })
 })
 
 // JSON malformado no body não pode virar página de erro HTML do Express

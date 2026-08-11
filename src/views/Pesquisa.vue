@@ -2,8 +2,6 @@
 import { ref, computed, nextTick, watch, onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import LogoCNHF from '../components/LogoCNHF.vue'
-import Check from '@lucide/vue/dist/esm/icons/check.mjs'
-import Copy from '@lucide/vue/dist/esm/icons/copy.mjs'
 import { SURVEY } from '../data/survey-schema.js'
 import { currentUser, submitSurvey, signUpComPesquisa } from '../data/api.js'
 
@@ -41,11 +39,6 @@ const ultimoPasso = modoPublico ? PASSO_NOME : TOTAL - 1
 const passo = ref(0)
 const enviando = ref(false)
 const erro = ref('')
-
-// tela final "Obrigado" + credenciais (o momento mais crítico do funil)
-const acesso = ref(null) // { email, senha, surveyPending }
-const copiado = ref(false)
-const guardei = ref(false) // o aluno confirmou que copiou/anotou a senha
 
 // ============================================================
 // RASCUNHO LOCAL — cada abandono é um lead perdido. Persistimos
@@ -330,9 +323,12 @@ async function finalizar() {
         : 'Não foi possível liberar o seu acesso agora. Tente novamente em instantes.'
       return
     }
-    // sucesso → o funil converteu: rascunho não é mais necessário
+    // sucesso → o funil converteu: aluno já sai logado direto ao ambiente.
+    // se o insert da pesquisa falhou no signUp (rede etc.), tenta 1x mais
+    // silenciosamente antes de seguir — o acesso já está criado de qualquer forma.
+    if (r.surveyPending) await submitSurvey(r.email, { ...respostas.value }, contato.value.nome)
     limparRascunho()
-    acesso.value = { email: r.email, senha: r.senha, surveyPending: r.surveyPending }
+    router.push({ name: 'ambiente' })
   } else {
     const reg = await submitSurvey(emailLogado, { ...respostas.value })
     enviando.value = false
@@ -343,37 +339,6 @@ async function finalizar() {
     limparRascunho()
     router.push({ name: 'ambiente' })
   }
-}
-
-async function copiarSenha() {
-  const senha = acesso.value?.senha || ''
-  let ok = false
-  try { await navigator.clipboard.writeText(senha); ok = true } catch { /* clipboard bloqueado */ }
-  if (!ok) {
-    // fallback p/ webview/permissão negada: seleção + execCommand
-    try {
-      const ta = document.createElement('textarea')
-      ta.value = senha
-      ta.setAttribute('readonly', '')
-      ta.style.position = 'fixed'; ta.style.opacity = '0'
-      document.body.appendChild(ta)
-      ta.select()
-      ok = document.execCommand('copy')
-      ta.remove()
-    } catch { ok = false }
-  }
-  if (ok) {
-    copiado.value = true
-    setTimeout(() => { copiado.value = false }, 2200)
-  }
-}
-
-async function entrarNoAmbiente() {
-  if (acesso.value?.surveyPending) {
-    const reg = await submitSurvey(acesso.value.email, { ...respostas.value }, contato.value.nome)
-    if (reg.ok) acesso.value.surveyPending = false
-  }
-  router.push({ name: 'ambiente' })
 }
 
 // rótulo do topo (contexto de cada tela)
@@ -413,68 +378,8 @@ watch(passo, () => { if (retomado.value && !enviando.value) retomado.value = fal
       <span v-if="emailLogado" class="quem muted">{{ emailLogado }}</span>
     </header>
 
-    <!-- ===== TELA FINAL: OBRIGADO + CREDENCIAIS ===== -->
-    <div v-if="acesso" class="card box obrigado">
-      <div class="check" aria-hidden="true"><Check :size="34" :stroke-width="3" /></div>
-      <div class="eyebrow" style="text-align:center">Pesquisa concluída</div>
-      <h1>Seu acesso está liberado!</h1>
-      <p class="lead muted">
-        Obrigado pelo preenchimento. Este é o seu acesso ao workbook do
-        <strong>Curso Nacional de Formação em Holding Familiar</strong> —
-        considere a primeira lacuna do curso já preenchida:
-      </p>
-
-      <!-- a senha como LACUNA PREENCHIDA: papel, linha pautada e tinta de
-           resposta — a mesma gramática visual do workbook que o aluno vai abrir -->
-      <div class="folha" role="group" aria-label="Seus dados de acesso">
-        <div class="folha-cabeca">
-          <span class="folha-titulo">Dados de acesso</span>
-          <span class="folha-onde">workbook.cursoholding.com.br</span>
-        </div>
-        <div class="lacuna">
-          <span class="lacuna-rot" id="rot-login">Login</span>
-          <span class="lacuna-valor" aria-labelledby="rot-login">{{ acesso.email }}</span>
-        </div>
-        <div class="lacuna">
-          <span class="lacuna-rot" id="rot-senha">Senha</span>
-          <span
-            class="lacuna-valor senha" aria-labelledby="rot-senha"
-            :aria-label="'Senha: ' + acesso.senha.split('').join(' ')"
-          >{{ acesso.senha }}</span>
-          <button class="btn sm copiar" type="button" @click="copiarSenha">
-            <component :is="copiado ? Check : Copy" :size="15" :stroke-width="2.5" aria-hidden="true" />
-            {{ copiado ? 'Copiada!' : 'Copiar senha' }}
-          </button>
-          <span class="sr-only" aria-live="polite">{{ copiado ? 'Senha copiada para a área de transferência.' : '' }}</span>
-        </div>
-      </div>
-
-      <p class="dica">
-        Depois de entrar você pode trocá-la por uma senha sua em <em>“Trocar senha”</em>.
-        Se perder, dá para recuperar na hora em <em>“Esqueci minha senha”</em> — com o
-        seu e-mail e o seu WhatsApp.
-      </p>
-      <p v-if="modoPublico && !contato.telefone.trim()" class="alert warn sem-whats">
-        Você não informou WhatsApp, então a recuperação automática de senha não
-        estará disponível para você. Guarde a senha com cuidado redobrado.
-      </p>
-
-      <label class="guarda">
-        <input type="checkbox" v-model="guardei" />
-        <span>Já copiei ou anotei a minha senha em um lugar seguro.</span>
-      </label>
-      <button
-        class="btn primary block grande" :disabled="!guardei"
-        :aria-describedby="guardei ? undefined : 'guarda-aviso'"
-        @click="entrarNoAmbiente"
-      >Entrar no meu ambiente</button>
-      <p v-if="!guardei" id="guarda-aviso" class="guarda-aviso muted">
-        Confirme acima que guardou a senha para continuar.
-      </p>
-    </div>
-
     <!-- ===== PESQUISA (passo a passo) ===== -->
-    <div v-else class="card box">
+    <div class="card box">
       <div class="eyebrow" aria-live="polite">{{ eyebrow }}</div>
 
       <div class="progresso">
@@ -570,13 +475,10 @@ watch(passo, () => { if (retomado.value && !enviando.value) retomado.value = fal
           </label>
         </div>
 
-        <!-- TELA DO WHATSAPP (opcional, mas habilita a recuperação de senha) -->
+        <!-- TELA DO WHATSAPP (opcional) -->
         <div v-else-if="noWhats" key="whats" class="q">
           <div class="q-label">Qual o seu WhatsApp? <span class="chip-opcional">Opcional</span></div>
-          <p class="q-ajuda muted">
-            É por onde você recebe os avisos das aulas — e é o que permite
-            <strong>recuperar a sua senha na hora</strong> se um dia esquecer.
-          </p>
+          <p class="q-ajuda muted">É por onde você recebe os avisos das aulas.</p>
           <label class="field grande" for="pes-tel">
             <input
               id="pes-tel" ref="campoRef"
@@ -685,61 +587,4 @@ textarea { min-height: 140px; font-size: 15.5px; margin-top: 4px; }
 .fade-enter-active, .fade-leave-active { transition: opacity .2s ease, transform .2s ease; }
 .fade-enter-from { opacity: 0; transform: translateX(14px); }
 .fade-leave-to { opacity: 0; transform: translateX(-14px); }
-
-/* ===== TELA "OBRIGADO" + CREDENCIAIS (momento de conversão) ===== */
-.obrigado { text-align: center; align-items: stretch; }
-.check {
-  width: 64px; height: 64px; margin: 4px auto 16px; border-radius: 50%;
-  background: var(--accent-soft); color: var(--accent); display: grid; place-items: center;
-  border: 1px solid var(--accent-line);
-}
-.obrigado h1 { font-size: 27px; margin: 8px 0 12px; letter-spacing: -0.02em; }
-.obrigado .lead { font-size: 15px; line-height: 1.6; max-width: 460px; margin: 0 auto 8px; }
-
-/* a "folha": um recorte do papel do workbook, com a senha escrita na pauta
-   em tinta de resposta (Literata itálica) — mesma linguagem das lacunas */
-.folha {
-  margin: 22px 0 6px; padding: 20px 22px 22px; text-align: left;
-  background: var(--papel); border: 1px solid var(--stroke-strong);
-  border-radius: var(--radius-sm);
-}
-.folha-cabeca {
-  display: flex; justify-content: space-between; align-items: baseline; gap: 10px;
-  flex-wrap: wrap; margin-bottom: 14px;
-}
-.folha-titulo { font-size: 11px; font-weight: 800; letter-spacing: .12em; text-transform: uppercase; color: var(--tinta-2); }
-.folha-onde { font-size: 12px; color: var(--tinta-2); }
-.lacuna { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; padding: 10px 0 2px; }
-.lacuna + .lacuna { margin-top: 10px; }
-.lacuna-rot { flex: none; width: 52px; font-size: 12px; font-weight: 700; color: var(--tinta-2); }
-.lacuna-valor {
-  flex: 1; min-width: 180px; padding: 0 2px 4px;
-  font-family: var(--fonte-livro); font-style: italic;
-  font-size: 17px; color: var(--resposta);
-  border-bottom: 1px solid var(--pauta); word-break: break-all;
-}
-.lacuna-valor.senha { font-size: 21px; letter-spacing: .05em; }
-.btn.sm.copiar { font-size: 12.5px; padding: 8px 13px; min-height: 40px; flex: none; align-self: center; }
-
-.dica { font-size: 13px; line-height: 1.55; color: var(--ink-2); margin: 14px 0 0; text-align: left; }
-.dica em { font-style: normal; font-weight: 600; color: var(--ink); }
-.sem-whats { margin: 12px 0 0; text-align: left; }
-
-/* confirmação "guardei a senha" — o gate do botão (alvo ≥44px) */
-.guarda {
-  display: flex; align-items: center; gap: 10px; text-align: left;
-  margin: 18px 0 0; padding: 12px 14px; min-height: 44px;
-  border: 1px solid var(--stroke); border-radius: var(--radius-sm);
-  cursor: pointer; font-size: 14px; line-height: 1.45; color: var(--ink);
-}
-.guarda input { width: 18px; height: 18px; flex: none; accent-color: var(--accent); cursor: pointer; }
-.guarda-aviso { font-size: 12.5px; margin: 8px 0 0; }
-
-.block { width: 100%; }
-.btn.grande { margin-top: 14px; font-size: 15.5px; padding: 14px 18px; min-height: 48px; }
-
-.sr-only {
-  position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0;
-  overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0;
-}
 </style>

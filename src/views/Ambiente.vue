@@ -9,13 +9,14 @@ import StatusSync from '../components/ui/StatusSync.vue'
 import ModalBase from '../components/ui/ModalBase.vue'
 import SumarioVivo from '../components/ui/SumarioVivo.vue'
 import { OPCOES_REF, rotuloRef } from '../components/ui/useRefsLivro.js'
-import { currentUser, getLead, logout, changePassword, listAnotacoes, criarAnotacao } from '../data/api.js'
+import { currentUser, getLead, logout, changePassword, listAnotacoes, criarAnotacao, isAdmin } from '../data/api.js'
 import { store } from '../data/store.js'
 import { WORKBOOK } from '../data/workbook-content.js'
 
 const router = useRouter()
 const email = currentUser()
 const nome = ref('')
+const ehAdmin = ref(false) // aluno não tem senha: só admin pode trocar
 
 // ------------------------------------------------------------
 // progresso real por capítulo (store local-first — funciona offline)
@@ -93,6 +94,7 @@ onMounted(async () => {
   prontoProg.value = true
   notaRef.value = store.progresso.ultima_secao || ''
   notas.value = await listAnotacoes()
+  ehAdmin.value = await isAdmin()
 })
 
 // ------------------------------------------------------------
@@ -269,7 +271,7 @@ const dataNota = (iso) => {
         <div><dt>Nome</dt><dd>{{ nome || '—' }}</dd></div>
         <div><dt>E-mail de acesso</dt><dd>{{ email }}</dd></div>
       </dl>
-      <form class="conta-form" @submit.prevent="salvarSenha">
+      <form v-if="ehAdmin" class="conta-form" @submit.prevent="salvarSenha">
         <h3>Trocar senha</h3>
         <label class="field" for="senha-atual"><span>Senha atual</span>
           <input id="senha-atual" type="password" v-model="atual" autocomplete="current-password"

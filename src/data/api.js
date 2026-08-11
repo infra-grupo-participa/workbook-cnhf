@@ -19,11 +19,10 @@ const norm = (e) => (e || '').trim().toLowerCase()
 // --- cache de sessão (para currentUser() síncrono) ---
 let _session = null
 let _perfil = null // { nome, role }
-let _recovery = false // sessão veio de link de recuperação de senha?
 
 function setSession(session) {
   _session = session
-  if (!session) { _perfil = null; _recovery = false }
+  if (!session) { _perfil = null }
 }
 
 /**
@@ -35,26 +34,8 @@ export async function initAuth() {
   setSession(data.session)
   supabase.auth.onAuthStateChange((evt, session) => {
     setSession(session)
-    if (evt === 'PASSWORD_RECOVERY') _recovery = true
   })
   if (_session) await loadPerfil()
-}
-
-/**
- * A sessão atual nasceu de um link de recuperação? Duas fontes, porque o
- * evento PASSWORD_RECOVERY pode disparar antes de initAuth assinar o
- * listener: (a) a flag do evento; (b) a claim `amr` do access token —
- * link de recuperação autentica por otp/recovery, nunca por password.
- * Fail-closed: na dúvida (token ilegível), NÃO é recovery.
- */
-function sessaoDeRecovery() {
-  if (_recovery) return true
-  const token = _session?.access_token
-  if (!token) return false
-  try {
-    const payload = JSON.parse(atob(token.split('.')[1].replace(/-/g, '+').replace(/_/g, '/')))
-    return (payload.amr || []).some((m) => ['recovery', 'otp', 'magiclink'].includes(m?.method))
-  } catch { return false }
 }
 
 async function loadPerfil() {
@@ -121,12 +102,6 @@ export async function logout() {
 // ============================================================
 // LEADS
 // ============================================================
-export async function isRegisteredLead(email) {
-  const { data, error } = await supabase.rpc('email_eh_lead', { p_email: norm(email) })
-  if (error) return false
-  return !!data
-}
-
 /** dados do lead/perfil do usuário logado (para saudação no ambiente) */
 export async function getLead(_email) {
   if (_perfil) return _perfil
@@ -142,20 +117,15 @@ export async function getLead(_email) {
  *
  * ORÁCULO DE ENUMERAÇÃO (finding MÉDIO da auditoria de 26/07): distinguir
  * NOT_REGISTERED de BAD_PASSWORD confirma para um atacante quem é aluno.
- * A DECISÃO DE EXIBIÇÃO é de produto (João/F2) — por isso o comportamento
- * atual fica preservado por default e a opção `generic: true` devolve o
- * código único INVALID sem consultar a RPC email_eh_lead (nenhuma
- * pré-checagem de existência). Quando a decisão sair, basta o front
- * chamar login(email, senha, { generic: true }).
+ * `generic: true` é o caminho ATUAL (exclusivo do acesso interno/admin):
+ * devolve o código único INVALID em qualquer falha, sem pré-checagem de
+ * existência de e-mail (sem oráculo de enumeração).
  */
 export async function login(email, password, { generic = false } = {}) {
   const e = norm(email)
   const { data, error } = await supabase.auth.signInWithPassword({ email: e, password })
   if (error) {
-    if (generic) return { ok: false, code: 'INVALID' }
-    // legado: distingue "e-mail não cadastrado" de "senha errada" (oráculo)
-    const ehLead = await isRegisteredLead(e)
-    return { ok: false, code: ehLead ? 'BAD_PASSWORD' : 'NOT_REGISTERED' }
+    return { ok: false, code: 'INVALID' }
   }
   setSession(data.session)
   await loadPerfil()
@@ -163,81 +133,28 @@ export async function login(email, password, { generic = false } = {}) {
 }
 
 /**
- * recuperarAcesso — FLUXO NOVO de recuperação SEM e-mail (contrato em
- * tmp/squad/extra-workbook.md): e-mail + telefone do cadastro + senha
- * nova, numa tela só. Fala com POST /api/recuperar-acesso (Express).
- *
- * A resposta do servidor é UNIFORME de propósito (nunca diz se o e-mail
- * existe ou se o telefone bateu) — o resultado real é descoberto AQUI,
- * tentando logar com a senha nova. Em sucesso o aluno já sai LOGADO.
- *
- * Retorna { ok: true, surveyDone } logado, ou { ok: false, code }:
- *   NO_MATCH   — dados não conferem com o cadastro (mensagem única:
- *                "E-mail e WhatsApp não conferem com o cadastro.")
- *   RATE_LIMIT — muitas tentativas; `retryAfterSeg` acompanha
- *   INVALID    — formato inválido (senha < 8, e-mail/telefone malformado)
- *   CONFIG     — servidor sem a chave admin configurada (avisar admin)
- *   NETWORK    — sem conexão com o servidor
- */
-export async function recuperarAcesso({ email, telefone, senha, modo, nome, faturamento, area }) {
-  const e = norm(email)
-  // dois caminhos: por WhatsApp (padrão) ou por dados do cadastro (nome +
-  // faturamento + área) para quem não lembra/trocou o número. O servidor
-  // responde de forma uniforme nos dois; o sucesso é descoberto no login abaixo.
-  const corpo = modo === 'dados'
-    ? { modo: 'dados', email: e, nome, faturamento, area, senha }
-    : { email: e, telefone, senha }
-  let r
-  try {
-    r = await fetch('/api/recuperar-acesso', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(corpo),
-    })
-  } catch { return { ok: false, code: 'NETWORK' } }
-
-  if (r.status === 429) {
-    const retryAfterSeg = Number(r.headers.get('Retry-After')) || 900
-    return { ok: false, code: 'RATE_LIMIT', retryAfterSeg }
-  }
-  if (r.status === 503) return { ok: false, code: 'CONFIG' }
-  if (!r.ok) return { ok: false, code: 'INVALID' }
-
-  // resposta 200 é opaca — o teste de verdade é conseguir entrar
-  const l = await supabase.auth.signInWithPassword({ email: e, password: senha })
-  if (l.error) return { ok: false, code: 'NO_MATCH' }
-  setSession(l.data.session)
-  await loadPerfil()
-  return { ok: true, surveyDone: await hasSurvey() }
-}
-
-/**
- * entrar — LOGIN SEM SENHA (decisão do Marcio, 2026-08-10).
- *
- * O aluno não tem mais senha: prova identidade com e-mail + WhatsApp do
- * cadastro (ou e-mail + nome/profissão/faturamento da pesquisa) e o
- * servidor devolve um magic link do GoTrue, que trocamos por sessão aqui.
+ * entrar — LOGIN CRU (decisão do dono do produto, 2026-08-11): o aluno
+ * prova identidade só com o e-mail. Sem senha, sem WhatsApp, sem dados da
+ * pesquisa, sem recuperação. O servidor devolve um magic link do GoTrue,
+ * que trocamos por sessão aqui.
  *
  * Por que `verifyOtp` e não abrir o link: navegar para o action_link faria
  * o browser sair da SPA e voltar por redirect, perdendo o estado. O token
  * do link é consumido direto — mesmo efeito, sem round-trip visível.
  *
  * Retorna { ok: true, surveyDone } já logado, ou { ok: false, code }:
- *   SEM_MATCH | RATE_LIMIT (+retryAfterSeg) | INVALID | CONFIG | NETWORK
+ *   NAO_CADASTRADO | ADMIN_PRECISA_SENHA | RATE_LIMIT (+retryAfterSeg) |
+ *   INVALID | CONFIG | NETWORK | ERRO
  */
-export async function entrar({ email, identificador, telefone, modo, nome, faturamento, area }) {
-  // `identificador` aceita e-mail OU WhatsApp; `email` fica por compatibilidade
-  const id = String(identificador ?? email ?? '').trim()
-  const corpo = modo === 'dados'
-    ? { modo: 'dados', identificador: id, nome, faturamento, area }
-    : { identificador: id, telefone }
+export async function entrar(email) {
+  const e = norm(email)
 
   let r
   try {
     r = await fetch('/api/entrar', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(corpo),
+      body: JSON.stringify({ email: e }),
     })
   } catch { return { ok: false, code: 'NETWORK' } }
 
@@ -251,51 +168,18 @@ export async function entrar({ email, identificador, telefone, modo, nome, fatur
   let dados = null
   try { dados = await r.json() } catch { return { ok: false, code: 'NETWORK' } }
   if (!r.ok || !dados?.ok || !dados?.token_hash) {
-    // AMBIGUO (WhatsApp em mais de um cadastro) e PRECISA_EMAIL trazem
-    // orientação específica — repassar em vez de virar "não conferem".
-    const conhecido = ['INVALID', 'AMBIGUO', 'PRECISA_EMAIL'].includes(dados?.code)
-    return { ok: false, code: conhecido ? dados.code : 'SEM_MATCH', mensagem: dados?.mensagem }
+    const conhecidos = ['NAO_CADASTRADO', 'ADMIN_PRECISA_SENHA', 'INVALID', 'CONFIG']
+    return { ok: false, code: conhecidos.includes(dados?.code) ? dados.code : 'ERRO', mensagem: dados?.mensagem }
   }
 
   // O servidor manda o `hashed_token` do GoTrue (não o action_link): o token
   // da querystring do link é o BRUTO e o verify responde 403 otp_expired.
   const v = await supabase.auth.verifyOtp({ type: 'magiclink', token_hash: dados.token_hash })
-  if (v.error || !v.data?.session) return { ok: false, code: 'SEM_MATCH' }
+  if (v.error || !v.data?.session) return { ok: false, code: 'ERRO' }
 
   setSession(v.data.session)
   await loadPerfil()
   return { ok: true, surveyDone: await hasSurvey() }
-}
-
-/**
- * Auto-cadastro por convite. Cria o usuário no Auth com metadata
- * sistema='workbook' (o trigger cria perfil + lead com nome/profissao/telefone).
- * Retorna { ok, code, needsConfirm }.
- * códigos: EXISTS (e-mail já tem acesso) | ERROR
- */
-export async function signUpConvite({ email, nome, senha, profissao, telefone }) {
-  const e = norm(email)
-  const { data, error } = await supabase.auth.signUp({
-    email: e,
-    password: senha,
-    options: {
-      data: {
-        sistema: 'workbook',
-        nome: nome || '',
-        profissao: profissao || null,
-        telefone: telefone || null,
-      },
-      emailRedirectTo: `${location.origin}${location.pathname}`,
-    },
-  })
-  if (error) {
-    const code = /already|exist|registered/i.test(error.message) ? 'EXISTS' : 'ERROR'
-    return { ok: false, code, message: error.message }
-  }
-  // Se o projeto exigir confirmação de e-mail, não há sessão ainda.
-  const needsConfirm = !data.session
-  if (data.session) { setSession(data.session); await loadPerfil() }
-  return { ok: true, needsConfirm }
 }
 
 /**
@@ -312,13 +196,14 @@ export function gerarSenha(len = 10) {
 }
 
 /**
- * signUpComPesquisa — FLUXO NOVO (porta de entrada do funil):
- * o lead responde a pesquisa SEM login; ao finalizar, criamos o acesso
- * com uma senha aleatória, gravamos as respostas e devolvemos a senha
- * para ser exibida no modal.
+ * signUpComPesquisa — porta de entrada do funil: o lead responde a
+ * pesquisa SEM login; ao finalizar, criamos o acesso com uma senha
+ * aleatória (o Auth exige senha, mas ela nunca é exibida — login é
+ * cru, só por e-mail) e gravamos as respostas.
  *
  * Como a confirmação de e-mail está DESLIGADA no projeto, o signUp já
- * retorna sessão → gravamos a pesquisa autenticado (respeita a RLS).
+ * retorna sessão → gravamos a pesquisa autenticado (respeita a RLS), e o
+ * aluno já sai logado direto para o ambiente.
  *
  * Retorna { ok, senha, email } em sucesso.
  * códigos de erro: EXISTS (e-mail já respondeu / já tem acesso) | ERROR
@@ -372,43 +257,6 @@ export async function changePassword(email, atual, nova) {
   const { error } = await supabase.auth.updateUser({ password: nova })
   if (error) return { ok: false, code: 'ERROR', message: error.message }
   return { ok: true }
-}
-
-/**
- * requestReset — LEGADO (fluxo por e-mail, substituído por recuperarAcesso).
- * Envia o e-mail nativo de redefinição do Supabase e responde de forma
- * UNIFORME: não pré-checa mais isRegisteredLead (era um oráculo de
- * enumeração — finding MÉDIO da auditoria de 26/07) e devolve { ok: true }
- * exista o e-mail ou não; o Supabase simplesmente não envia nada para
- * e-mail desconhecido. Retorna { ok, code }.
- */
-export async function requestReset(email) {
-  const e = norm(email)
-  const { error } = await supabase.auth.resetPasswordForEmail(e, {
-    redirectTo: `${location.origin}${location.pathname}#/redefinir-senha`,
-  })
-  // erro de rede/serviço ainda é reportado; "e-mail não existe" não é erro
-  if (error && !/user|not.?found/i.test(error.message)) {
-    return { ok: false, code: 'ERROR', message: error.message }
-  }
-  return { ok: true }
-}
-
-/**
- * resetPassword — LEGADO (fluxo por e-mail). TRAVADO a sessões de
- * recovery: antes trocava a senha de QUALQUER sessão ativa sem pedir a
- * senha atual (CWE-620, finding MÉDIO da auditoria de 26/07 — sessão
- * esquecida em máquina compartilhada virava tomada permanente da conta).
- * Agora só age quando a sessão nasceu de link de recuperação; sessão
- * comum deve usar changePassword (que revalida a senha atual).
- * códigos de erro: NOT_RECOVERY | BAD_TOKEN
- */
-export async function resetPassword(_token, nova) {
-  if (!sessaoDeRecovery()) return { ok: false, code: 'NOT_RECOVERY' }
-  const { error } = await supabase.auth.updateUser({ password: nova })
-  if (error) return { ok: false, code: 'BAD_TOKEN', message: error.message }
-  _recovery = false // a troca consumiu a janela de recovery
-  return { ok: true, email: currentUser() }
 }
 
 // ============================================================

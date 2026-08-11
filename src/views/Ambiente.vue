@@ -5,6 +5,7 @@ import NotebookPen from '@lucide/vue/dist/esm/icons/notebook-pen.mjs'
 import UserRound from '@lucide/vue/dist/esm/icons/user-round.mjs'
 import LogOut from '@lucide/vue/dist/esm/icons/log-out.mjs'
 import LogoCNHF from '../components/LogoCNHF.vue'
+import CtaGrupo from '../components/CtaGrupo.vue'
 import StatusSync from '../components/ui/StatusSync.vue'
 import ModalBase from '../components/ui/ModalBase.vue'
 import SumarioVivo from '../components/ui/SumarioVivo.vue'
@@ -203,6 +204,8 @@ const dataNota = (iso) => {
           <p v-if="retomada" class="retomada muted">Você parou em: {{ retomada.rotulo }} — {{ retomada.titulo }}</p>
         </div>
       </section>
+
+      <CtaGrupo />
 
       <div class="colunas">
         <!-- SUMÁRIO VIVO -->

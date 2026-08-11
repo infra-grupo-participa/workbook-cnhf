@@ -50,16 +50,17 @@ onMounted(async () => {
     </div>
 
     <div class="cta-texto">
-      <div class="eyebrow">Comunidade</div>
-      <h2 id="cta-grupo-h">Grupo de {{ rotuloGrupo }} no WhatsApp</h2>
+      <div class="eyebrow">Avisos do curso</div>
+      <h2 id="cta-grupo-h">Receba os avisos no WhatsApp</h2>
       <p class="muted">
-        Troque experiências e tire dúvidas com quem está fazendo o curso junto com você.
+        É pelo grupo de {{ rotuloGrupo }} que avisamos o horário das lives da Semana de
+        Vantagens e tudo o que você não pode perder.
       </p>
     </div>
 
     <a class="btn zap" :href="link" target="_blank" rel="noopener noreferrer">
-      <span aria-hidden="true">💬</span>
-      Entrar no grupo
+      <span class="zap-emoji" aria-hidden="true">💬</span>
+      Entrar no grupo de avisos
     </a>
   </section>
 </template>
@@ -132,16 +133,29 @@ onMounted(async () => {
 
 /* botão verde: mesma altura/raio dos .btn do sistema, só a cor muda */
 .btn.zap {
+  /* <a> sem reset global herda sublinhado e cor de link do navegador, que
+     venciam o branco do botão e o faziam parecer um link quebrado. */
+  text-decoration: none;
   background: var(--zap-btn);
   border-color: var(--zap-btn);
   color: var(--zap-btn-ink, #fff);
   font-weight: 700;
   white-space: nowrap;
   flex: none;
+  padding: 12px 22px;
+  box-shadow: 0 2px 10px rgba(15, 122, 64, 0.28);
+}
+.btn.zap:hover,
+.btn.zap:focus,
+.btn.zap:active,
+.btn.zap:visited {
+  color: var(--zap-btn-ink, #fff);
+  text-decoration: none;
 }
 .btn.zap:hover {
   background: var(--zap-btn-hover);
   border-color: var(--zap-btn-hover);
+  box-shadow: 0 3px 14px rgba(15, 122, 64, 0.34);
 }
 /* SEM :focus-visible próprio: o anel global (styles.css, --resposta) tem
    contraste bom nos 3 temas. Um anel verde sobre o card verde media 1.98:1

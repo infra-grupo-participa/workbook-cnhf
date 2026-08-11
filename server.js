@@ -235,25 +235,6 @@ function ipCliente(req) {
 // ---------- helpers do handler ----------
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
 
-/**
- * Plausibilidade de WhatsApp brasileiro (não é validação de existência).
- * Recebe só dígitos. Remove o prefixo 55 (DDI) quando presente e sobra
- * 10-11 dígitos; exige DDD real (11-99) e rejeita sequências de dígito
- * repetido (ex.: "0000000000"), que passam no teto de tamanho mas quebram
- * o casamento por últimos-8-dígitos nas RPCs de grupo.
- */
-function telefonePlausivel(digitos) {
-  let d = digitos
-  if (d.length === 12 || d.length === 13) {
-    if (d.startsWith('55') && (d.length - 2 === 10 || d.length - 2 === 11)) d = d.slice(2)
-  }
-  if (d.length !== 10 && d.length !== 11) return false
-  const ddd = Number(d.slice(0, 2))
-  if (ddd < 11 || ddd > 99) return false
-  if (/^(\d)\1+$/.test(d)) return false
-  return true
-}
-
 function auditar(evento) {
   // stdout = log da Node app na Hostinger. Follow-up: persistir em tabela.
   console.log('[auditoria][entrar]', JSON.stringify({ ts: new Date().toISOString(), ...evento }))
@@ -344,7 +325,7 @@ app.post('/api/entrar', express.json({ limit: '8kb' }), async (req, res) => {
 })
 
 // ============================================================
-// GET /api/grupo · POST /api/grupo/telefone — CTA do grupo de WhatsApp
+// GET /api/grupo — CTA do grupo de WhatsApp por segmento
 // ------------------------------------------------------------
 // Na home do aluno logado, mostra um link de convite (Sendflow) para o
 // grupo de WhatsApp do SEGMENTO dele (Advocacia/Contabilidade/Outra) — mas
@@ -366,11 +347,11 @@ app.post('/api/entrar', express.json({ limit: '8kb' }), async (req, res) => {
 //  2. RPCs (docs/sql/2026-08-11-cta-grupo.sql) são security definer com
 //     EXECUTE restrito a service_role — leem controle.vw_lead_grupo_status,
 //     schema de OUTRO sistema.
-//  3. RATE LIMIT no envio de telefone usa AMBOS os baldes: por IP (limitar,
-//     igual /api/entrar) e por e-mail (3 tentativas / 15 min) — só por
-//     e-mail não bastava, porque o e-mail é fixo pelo token e um aluno
-//     autenticado poderia varrer telefones de terceiros usando o próprio
-//     e-mail como chave (ver comentário no handler).
+//  3. O telefone NUNCA e pedido ao aluno: vem de workbook.leads ou, como
+//     fallback, de respostas_pesquisa.telefone. Havia um POST
+//     /api/grupo/telefone para quem nao tinha o dado; foi REMOVIDO (com a
+//     RPC status_grupo_por_telefone) porque permitia a um aluno autenticado
+//     consultar se o telefone de um TERCEIRO esta no grupo.
 //  4. AUDITORIA em toda tentativa, evento:'grupo', resultado distinto por
 //     desfecho — mesmo padrão do /api/entrar.
 // ============================================================
@@ -420,71 +401,21 @@ app.get('/api/grupo', async (req, res) => {
 
   if (linha?.no_grupo) {
     auditar({ evento: 'grupo', email, ip, resultado: 'ja_no_grupo' })
-    return res.status(200).json({ ok: true, mostrar: false, area: linha.area ?? null, link: null, precisaTelefone: false })
+    return res.status(200).json({ ok: true, mostrar: false, area: linha.area ?? null, link: null })
   }
 
+  // Sem telefone em NENHUMA fonte (leads nem pesquisa): 79 de 8.255 alunos
+  // medidos em 11/08/2026. Nao da para saber se ja estao no grupo, e nao
+  // pedimos o numero (o dono do produto decidiu nao ter esse campo). Mostramos
+  // o convite: o custo de ate 79 entradas duplicadas e menor que o de deixar
+  // aluno legitimo sem convite nenhum.
   if (!linha?.tem_telefone) {
-    auditar({ evento: 'grupo', email, ip, resultado: 'pediu_telefone' })
-    return res.status(200).json({ ok: true, mostrar: true, area: linha?.area ?? null, link: null, precisaTelefone: true })
+    auditar({ evento: 'grupo', email, ip, resultado: 'mostrou_sem_telefone' })
+    return res.status(200).json({ ok: true, mostrar: true, area: linha?.area ?? null, link: linkDoSegmento(linha?.area) })
   }
 
   auditar({ evento: 'grupo', email, ip, resultado: 'mostrou' })
-  return res.status(200).json({ ok: true, mostrar: true, area: linha.area ?? null, link: linkDoSegmento(linha.area), precisaTelefone: false })
-})
-
-app.post('/api/grupo/telefone', express.json({ limit: '4kb' }), async (req, res) => {
-  const ip = ipCliente(req)
-
-  if (!admin) {
-    auditar({ evento: 'grupo', ip, resultado: 'config', motivo: 'SUPABASE_SERVICE_ROLE_KEY ausente' })
-    return res.status(503).json({ ok: false, code: 'CONFIG', mensagem: 'Indisponível no momento.' })
-  }
-
-  const email = await emailDaSessao(req)
-  if (!email) {
-    auditar({ evento: 'grupo', ip, resultado: 'nao_autenticado' })
-    return res.status(401).json({ ok: false, code: 'NAO_AUTENTICADO', mensagem: 'Sessão inválida ou expirada.' })
-  }
-
-  // Este endpoint aceita um telefone ARBITRÁRIO no body — sem o rate limit
-  // por IP, um aluno autenticado (e-mail fixo pelo token) poderia varrer
-  // números de TERCEIROS e descobrir, pela resposta, quem está no grupo de
-  // WhatsApp (o mesmo oráculo que o comentário da RPC diz querer evitar).
-  // Por isso: balde por IP (limitar, igual /api/entrar) SOMADO ao balde
-  // próprio por e-mail, agora com teto baixo (3/15min) — o caso legítimo é
-  // "digitei meu WhatsApp, errei uma vez, corrigi", não uma sequência longa.
-  const bloqueadoAte = Math.max(limitar(ip, email), bater(`grupo_tel:${email}`, 3))
-  if (bloqueadoAte) {
-    const seg = Math.ceil((bloqueadoAte - Date.now()) / 1000)
-    auditar({ evento: 'grupo', email, ip, resultado: 'rate_limit', bloqueadoPorSeg: seg })
-    return res.status(429).set('Retry-After', String(seg))
-      .json({ ok: false, code: 'RATE_LIMIT', mensagem: 'Muitas tentativas. Aguarde alguns minutos e tente de novo.' })
-  }
-
-  const telefoneDigitos = String(req.body?.telefone || '').replace(/\D/g, '')
-  if (!telefonePlausivel(telefoneDigitos)) {
-    auditar({ evento: 'grupo', email, ip, resultado: 'erro', motivo: 'telefone_invalido' })
-    return res.status(400).json({ ok: false, code: 'INVALID', mensagem: 'Digite um WhatsApp válido, com DDD.' })
-  }
-
-  const { data, error: erroRpc } = await admin.rpc('status_grupo_por_telefone', { p_email: email, p_telefone: telefoneDigitos })
-  if (erroRpc) {
-    auditar({ evento: 'grupo', email, ip, resultado: 'erro', motivo: erroRpc.message })
-    return res.status(500).json({ ok: false, code: 'ERRO', mensagem: 'Não foi possível verificar o grupo agora.' })
-  }
-  const linha = Array.isArray(data) ? data[0] : data
-
-  // uma linha de auditoria por request (padrão do /api/entrar): a RPC já
-  // grava o telefone (se estava vazio) como efeito colateral do mesmo
-  // caminho, então o resultado registrado é o desfecho do CTA, não a
-  // gravação em si — 'telefone_gravado' cobre ambos os ramos abaixo.
-  if (linha?.no_grupo) {
-    auditar({ evento: 'grupo', email, ip, resultado: 'telefone_gravado', desfecho: 'ja_no_grupo' })
-    return res.status(200).json({ ok: true, mostrar: false, jaEstava: true })
-  }
-
-  auditar({ evento: 'grupo', email, ip, resultado: 'telefone_gravado', desfecho: 'mostrou' })
-  return res.status(200).json({ ok: true, mostrar: true, link: linkDoSegmento(linha?.area) })
+  return res.status(200).json({ ok: true, mostrar: true, area: linha.area ?? null, link: linkDoSegmento(linha.area) })
 })
 
 // JSON malformado no body não pode virar página de erro HTML do Express

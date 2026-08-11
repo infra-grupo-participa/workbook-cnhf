@@ -579,14 +579,14 @@ export async function isAdmin() {
 // GRUPO DE WHATSAPP — CTA no ambiente para quem ainda não entrou
 // ------------------------------------------------------------
 // Os links do Sendflow vivem só no server.js (rotas /api/grupo e
-// /api/grupo/telefone). O front nunca hardcoda link nenhum: ele chega
+// /api/grupo). O front nunca hardcoda link nenhum: ele chega
 // pronto na resposta, ou não chega. Fail-closed em qualquer situação
 // que não seja um 200 com corpo bem formado — ATENÇÃO: fetch não lança
 // em erro HTTP, `res.ok` tem que ser checado explicitamente.
 // ============================================================
-const SEM_GRUPO = { ok: false, mostrar: false, area: null, link: null, precisaTelefone: false }
+const SEM_GRUPO = { ok: false, mostrar: false, area: null, link: null }
 
-/** status do CTA de grupo do aluno logado → { ok, mostrar, area, link, precisaTelefone } */
+/** status do CTA de grupo do aluno logado → { ok, mostrar, area, link } */
 export async function statusGrupo() {
   const token = _session?.access_token
   if (!token) return SEM_GRUPO
@@ -605,45 +605,6 @@ export async function statusGrupo() {
     mostrar: !!dados.mostrar,
     area: dados.area ?? null,
     link: dados.link ?? null,
-    precisaTelefone: !!dados.precisaTelefone,
   }
 }
 
-/**
- * informarTelefoneGrupo — o aluno preenche o WhatsApp que faltava no
- * cadastro para liberar o link do grupo do segmento dele.
- * → { ok, mostrar, link, jaEstava } em sucesso, ou { ok:false, code, mensagem }
- * em qualquer falha — códigos conhecidos: INVALID | RATE_LIMIT | ERRO.
- * Fail-closed: uma resposta de erro NUNCA repassa `link` nem `mostrar:true`.
- */
-export async function informarTelefoneGrupo(telefone) {
-  const token = _session?.access_token
-  if (!token) return { ok: false }
-  let r
-  try {
-    r = await fetch('/api/grupo/telefone', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-      body: JSON.stringify({ telefone }),
-    })
-  } catch { return { ok: false } }
-
-  if (r.status === 429) {
-    const retryAfterSeg = Number(r.headers.get('Retry-After')) || 900
-    return { ok: false, code: 'RATE_LIMIT', retryAfterSeg }
-  }
-
-  // ATENÇÃO: fetch não lança em erro HTTP — checar o corpo, não só o status.
-  let dados = null
-  try { dados = await r.json() } catch { return { ok: false } }
-  if (!r.ok || !dados?.ok) {
-    const conhecidos = ['INVALID', 'RATE_LIMIT']
-    return { ok: false, code: conhecidos.includes(dados?.code) ? dados.code : 'ERRO', mensagem: dados?.mensagem }
-  }
-  return {
-    ok: true,
-    mostrar: !!dados.mostrar,
-    link: dados.link ?? null,
-    jaEstava: !!dados.jaEstava,
-  }
-}

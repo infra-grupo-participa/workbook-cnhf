@@ -1,11 +1,11 @@
 -- ============================================================
--- workbook.status_grupo_por_email / workbook.status_grupo_por_telefone
+-- workbook.status_grupo_por_email
 -- ------------------------------------------------------------
 -- Suporte ao CTA "entre no grupo de WhatsApp do seu segmento" na home do
 -- aluno logado (Ambiente.vue). O requisito de produto é NÃO duplicar aluno
 -- em grupo: mostrar o link só para quem ainda não está lá dentro.
 --
--- Por que existem estas duas funções (e não uma leitura direta pelo front):
+-- Por que esta função existe (e não uma leitura direta pelo front):
 --   1. O casamento "já está no grupo?" depende de `controle.vw_lead_grupo_status`,
 --      que é schema/dado de OUTRO sistema (controle de eventos/disparos), não do
 --      workbook. O aluno autenticado no workbook não tem (e não deve ganhar)
@@ -20,12 +20,13 @@
 --      o mesmo formato de vazamento já documentado em
 --      docs/audits/2026-07-27-rls-critico.md para `email_eh_lead`. Quem chama
 --      é sempre o server.js com o e-mail extraído do token da própria sessão
---      (nunca do body) — ver GET /api/grupo e POST /api/grupo/telefone.
+--      (nunca do body) — ver GET /api/grupo.
 --
--- Suposição a confirmar antes de aplicar: a coluna de telefone em
--- `controle.vw_lead_grupo_status` foi assumida como `telefone` (padrão do
--- resto da base). Se o nome real for outro, ajustar antes de rodar — este
--- arquivo é para revisão, não é aplicado automaticamente.
+-- Estado: APLICADO em producao (v2, com fallback da pesquisa). A funcao
+-- irma `status_grupo_por_telefone` foi DROPADA em 11/08/2026 junto com a
+-- rota POST /api/grupo/telefone: o CTA deixou de pedir o numero ao aluno,
+-- e sem consumidor ela so seria superficie de ataque (permitia consultar
+-- se um telefone arbitrario esta no grupo).
 -- ============================================================
 
 -- ------------------------------------------------------------
@@ -56,7 +57,8 @@ as $$
   -- Critério determinístico: a resposta mais recente por atualizado_em,
   -- com criado_em como desempate.
   pesquisa as (
-    select rp.answers ->> 'area' as area
+    select rp.answers ->> 'area' as area,
+           rp.telefone            as telefone
     from workbook.respostas_pesquisa rp, email_norm en
     where rp.email = en.email
     order by rp.atualizado_em desc nulls last, rp.criado_em desc
@@ -70,105 +72,40 @@ as $$
     where l.email = en.email
     limit 1
   ),
+  -- v2 (11/08/2026): o telefone tambem vem da PESQUISA. Medido: dos 1.090
+  -- alunos sem telefone em workbook.leads, 1.011 tem em respostas_pesquisa.
+  -- Ler as duas fontes derrubou o caso "sem telefone" de 1.090 para 79.
+  -- leads tem prioridade; a pesquisa e o fallback.
+  tel as (
+    select coalesce(
+             nullif(regexp_replace(coalesce((select telefone from lead), ''), '\D', '', 'g'), ''),
+             nullif(regexp_replace(coalesce((select telefone from pesquisa), ''), '\D', '', 'g'), '')
+           ) as digitos
+  ),
   -- normalização "últimos 8 dígitos": neutraliza DDI (+55), zero de tronco
   -- e o 9º dígito variável — validado nesta base (7.147/7.158 casaram).
-  lead_norm as (
-    select right(regexp_replace(coalesce(lead.telefone, ''), '\D', '', 'g'), 8) as tel8,
-           length(regexp_replace(coalesce(lead.telefone, ''), '\D', '', 'g')) as qtd_digitos
-    from lead
+  tel_norm as (
+    select right(coalesce(digitos,''), 8) as tel8,
+           length(coalesce(digitos,''))   as qtd_digitos
+    from tel
   ),
   grupo as (
     select true as achou
-    from controle.vw_lead_grupo_status g, lead_norm ln
-    where ln.qtd_digitos >= 10
+    from controle.vw_lead_grupo_status g, tel_norm tn
+    where tn.qtd_digitos >= 10
       and g.permanece = true
-      and right(regexp_replace(coalesce(g.telefone, ''), '\D', '', 'g'), 8) = ln.tel8
+      and right(regexp_replace(coalesce(g.telefone, ''), '\D', '', 'g'), 8) = tn.tel8
     limit 1
   )
   select
     pesquisa.area,
     coalesce(grupo.achou, false)                as no_grupo,
-    coalesce(lead_norm.qtd_digitos, 0) >= 10     as tem_telefone
+    coalesce(tel_norm.qtd_digitos, 0) >= 10      as tem_telefone
   from (select 1) uma_linha
   left join pesquisa on true
-  left join lead_norm on true
+  left join tel_norm on true
   left join grupo on true
 $$;
 
 revoke execute on function workbook.status_grupo_por_email(text) from public, anon, authenticated;
 grant  execute on function workbook.status_grupo_por_email(text) to service_role;
-
--- ------------------------------------------------------------
--- workbook.status_grupo_por_telefone(p_email text, p_telefone text)
---   → (area text, no_grupo boolean, tem_telefone boolean)
---
--- Caminho do aluno SEM telefone cadastrado (1.070 casos): ele informa o
--- WhatsApp na hora, na tela do CTA. A função checa `no_grupo` com o
--- telefone digitado e, SÓ QUANDO o resultado é "não está no grupo"
--- (v_no_grupo = false) E o cadastro está vazio/nulo, GRAVA esse telefone em
--- workbook.leads — nunca sobrescreve um telefone já existente (esta função
--- não é um endpoint de "trocar telefone").
---
--- Por que a gravação é condicionada a v_no_grupo = false (correção de
--- auditoria, 2026-08-11): o campo pode ser usado para SONDAR o número de um
--- terceiro (o aluno autenticado digita um número que não é o dele). Se o
--- número sondado já está no grupo, gravá-lo no cadastro do sondador
--- contamina a base de conciliação com um telefone que não é dele. O fluxo
--- legítimo é "não estou no grupo → entro com esse número"; nesse caso
--- v_no_grupo é false e a gravação é exatamente o comportamento desejado. Se
--- v_no_grupo é true, ou é o próprio aluno (que não precisa que gravemos
--- nada agora — ele já está lá) ou é sondagem — nos dois casos não gravar é
--- o correto.
---
--- `tem_telefone` no retorno reflete o telefone DIGITADO (sempre true se
--- passou pela validação de dígitos no server.js antes de chamar); existe
--- só para manter a mesma assinatura de status_grupo_por_email e permitir
--- que o server.js trate as duas respostas de forma uniforme.
--- ------------------------------------------------------------
-create or replace function workbook.status_grupo_por_telefone(p_email text, p_telefone text)
-returns table (area text, no_grupo boolean, tem_telefone boolean)
-language plpgsql
-security definer
-volatile -- faz UPDATE condicional; não pode ser stable/immutable
-set search_path = workbook, controle, public, pg_temp
-as $$
-declare
-  v_email   text := lower(btrim(p_email));
-  v_tel_dig text := regexp_replace(coalesce(p_telefone, ''), '\D', '', 'g');
-  v_tel8    text := right(v_tel_dig, 8);
-  v_area    text;
-  v_no_grupo boolean;
-begin
-  -- mesmo critério determinístico de status_grupo_por_email
-  select rp.answers ->> 'area'
-  into v_area
-  from workbook.respostas_pesquisa rp
-  where rp.email = v_email
-  order by rp.atualizado_em desc nulls last, rp.criado_em desc
-  limit 1;
-
-  select exists (
-    select 1
-    from controle.vw_lead_grupo_status g
-    where g.permanece = true
-      and right(regexp_replace(coalesce(g.telefone, ''), '\D', '', 'g'), 8) = v_tel8
-  )
-  into v_no_grupo;
-
-  -- grava o telefone digitado SÓ quando: (a) o resultado é "não está no
-  -- grupo" — nunca ao sondar número de terceiro já-membro (ver comentário
-  -- acima) — e (b) o campo está vazio/nulo — nunca sobrescreve um telefone
-  -- já cadastrado (contrato explícito do produto).
-  if coalesce(v_no_grupo, false) = false then
-    update workbook.leads
-    set telefone = p_telefone
-    where email = v_email
-      and (telefone is null or btrim(telefone) = '');
-  end if;
-
-  return query select v_area, coalesce(v_no_grupo, false), (length(v_tel_dig) >= 10);
-end;
-$$;
-
-revoke execute on function workbook.status_grupo_por_telefone(text, text) from public, anon, authenticated;
-grant  execute on function workbook.status_grupo_por_telefone(text, text) to service_role;

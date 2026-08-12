@@ -3,7 +3,7 @@ import { ref, computed, nextTick, watch, onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import LogoCNHF from '../components/LogoCNHF.vue'
 import { SURVEY } from '../data/survey-schema.js'
-import { currentUser, submitSurvey, signUpComPesquisa } from '../data/api.js'
+import { currentUser, submitSurvey, signUpComPesquisa, entrarComPesquisaExistente } from '../data/api.js'
 
 const route = useRoute()
 const router = useRouter()
@@ -41,6 +41,21 @@ const enviando = ref(false)
 const erro = ref('')
 
 // ============================================================
+// REENTRADA — e-mail já respondeu antes (EXISTS no signUp). Em vez de
+// barrar com texto morto, login cru + upsert da pesquisa. `reentrando`
+// cobre a fase toda dentro de `enviando` (evita duplo clique = 2 signIns).
+// `entradaFalha` guarda { code, retryAfterSeg, mensagem } quando a
+// reentrada não dá certo — card com botão, nunca texto solto.
+// ============================================================
+const reentrando = ref(false)
+const entradaFalha = ref(null)
+const emailReentrada = ref('')
+const minutosEspera = computed(() => {
+  const seg = Number(entradaFalha.value?.retryAfterSeg) || 0
+  return Math.max(1, Math.ceil(seg / 60))
+})
+
+// ============================================================
 // RASCUNHO LOCAL — cada abandono é um lead perdido. Persistimos
 // respostas + contato + passo no localStorage e retomamos em
 // silêncio na volta (com saída "Recomeçar do zero").
@@ -54,8 +69,20 @@ function lerRascunho() {
     const r = JSON.parse(localStorage.getItem(CHAVE_RASCUNHO) || 'null')
     if (!r || r.v !== 1) return null
     if (Date.now() - (r.ts || 0) > VALIDADE_RASCUNHO) return null
-    if ((r.quem || 'publico') !== (emailLogado || 'publico')) return null
-    return r
+    const dono = r.quem || 'publico'
+    if (dono === (emailLogado || 'publico')) return r
+    // rascunho salvo como 'publico' (antes do login) cujo e-mail de contato
+    // bate com o e-mail JÁ logado agora: é a mesma pessoa completando o
+    // próprio fluxo depois de autenticar (ex.: card "entrada falhou" ->
+    // login manual). Sem isso a promessa "suas respostas ficaram salvas
+    // neste navegador" era falsa: o rascunho existia mas nunca era lido.
+    // Qualquer outro caso (dono != publico, ou e-mail não bate) é rejeitado —
+    // nunca expõe rascunho de uma conta pra sessão de outra.
+    if (emailLogado && dono === 'publico' &&
+      String(r.contato?.email || '').trim().toLowerCase() === emailLogado.trim().toLowerCase()) {
+      return r
+    }
+    return null
   } catch { return null }
 }
 // restaura ANTES de registrar os watchers (senão o restore regrava o rascunho)
@@ -254,6 +281,7 @@ function pular() {
 }
 
 function avancar() {
+  if (enviando.value) return   // Enter repetido durante o envio não reabre o fluxo
   erro.value = ''
   if (noEmail.value) {
     erros.value.email = checarEmail()
@@ -297,6 +325,9 @@ function voltar() {
 }
 
 async function finalizar() {
+  if (enviando.value) return   // guarda de duplo-submit: cobre o botão (:disabled)
+                                // E o Enter no campo do nome, que chama finalizar()
+                                // direto sem passar pelo :disabled do botão.
   erro.value = ''
   // garante que nenhuma pergunta obrigatória (nem sub-campo condicional
   // obrigatório revelado pela resposta) ficou vazia — defesa final.
@@ -308,6 +339,7 @@ async function finalizar() {
   })
   if (faltando) { erro.value = 'Ainda falta responder alguma pergunta.'; passo.value = OFFSET_PERGUNTA + SURVEY.indexOf(faltando); return }
 
+  entradaFalha.value = null
   enviando.value = true
   if (modoPublico) {
     const r = await signUpComPesquisa({
@@ -316,17 +348,23 @@ async function finalizar() {
       telefone: contato.value.telefone.replace(/\D/g, ''),
       answers: { ...respostas.value },
     })
-    enviando.value = false
     if (!r.ok) {
-      erro.value = r.code === 'EXISTS'
-        ? 'Já existe um acesso com esse e-mail. Se já respondeu antes, faça o login.'
-        : 'Não foi possível liberar o seu acesso agora. Tente novamente em instantes.'
+      if (r.code === 'EXISTS') {
+        // a pessoa respondeu a pesquisa inteira — não pode terminar num beco.
+        // login cru com o e-mail que ela acabou de digitar e grava a pesquisa
+        // (upsert por user_id: atualiza, não duplica).
+        await reentrarComPesquisa(contato.value.email)
+        return
+      }
+      enviando.value = false
+      erro.value = 'Não foi possível liberar o seu acesso agora. Tente novamente em instantes.'
       return
     }
     // sucesso → o funil converteu: aluno já sai logado direto ao ambiente.
     // se o insert da pesquisa falhou no signUp (rede etc.), tenta 1x mais
     // silenciosamente antes de seguir — o acesso já está criado de qualquer forma.
     if (r.surveyPending) await submitSurvey(r.email, { ...respostas.value }, contato.value.nome)
+    enviando.value = false
     limparRascunho()
     router.push({ name: 'ambiente' })
   } else {
@@ -339,6 +377,52 @@ async function finalizar() {
     limparRascunho()
     router.push({ name: 'ambiente' })
   }
+}
+
+/**
+ * reentrarComPesquisa — login cru + upsert da pesquisa para quem já tinha
+ * acesso (EXISTS). `enviando` continua true durante toda a chamada (o botão
+ * já reflete `reentrando`) e a guarda `if (enviando.value) return` no topo de
+ * `avancar()`/`finalizar()` cobre também o Enter no campo do nome — não só o
+ * `:disabled` do botão —, evitando duplo clique/duplo Enter/duplo signIn.
+ * NAO_CADASTRADO aqui seria contraditório (o servidor acabou de dizer que
+ * o e-mail EXISTE) — trata como ERRO genérico, com botão de login.
+ */
+async function reentrarComPesquisa(email) {
+  reentrando.value = true
+  emailReentrada.value = email
+  const r = await entrarComPesquisaExistente({
+    email,
+    answers: { ...respostas.value },
+    nome: contato.value.nome,
+    telefone: contato.value.telefone.replace(/\D/g, ''),
+  })
+  if (!r.ok) {
+    reentrando.value = false
+    enviando.value = false
+    entradaFalha.value = {
+      code: r.code === 'NAO_CADASTRADO' ? 'ERRO' : r.code,
+      retryAfterSeg: r.retryAfterSeg,
+      mensagem: r.mensagem,
+    }
+    return
+  }
+  if (r.surveyPending) {
+    // upsert falhou (rede etc.) mesmo já logado. Retenta 1x direto: se cair
+    // pra `ambiente` com a pesquisa ainda pendente, a guarda `requiresSurvey`
+    // devolveria a pessoa pra cá em loop (pesquisa?motivo=trava).
+    const retry = await submitSurvey(email, { ...respostas.value }, contato.value.nome)
+    if (!retry?.ok) {
+      reentrando.value = false
+      enviando.value = false
+      entradaFalha.value = { code: 'ERRO' }
+      return
+    }
+  }
+  reentrando.value = false
+  enviando.value = false
+  limparRascunho()
+  router.push({ name: 'ambiente' })
 }
 
 // rótulo do topo (contexto de cada tela)
@@ -509,9 +593,38 @@ watch(passo, () => { if (retomado.value && !enviando.value) retomado.value = fal
         </div>
       </Transition>
 
+      <!-- REENTRADA: e-mail já tinha acesso — login automático em andamento -->
+      <div v-if="reentrando" class="alert ok" role="status" aria-live="polite" style="margin-top:14px">
+        Seu acesso já estava liberado — entrando…
+      </div>
+
+      <!-- REENTRADA FALHOU: card com mensagem específica + botão, nunca texto solto -->
+      <div v-else-if="entradaFalha" class="alert bad reentrada-falha" role="alert" style="margin-top:14px">
+        <p v-if="entradaFalha.code === 'ADMIN_PRECISA_SENHA'">
+          Este e-mail é de uma conta administrativa — entre pelo acesso interno.
+        </p>
+        <p v-else-if="entradaFalha.code === 'RATE_LIMIT'">
+          Muitas tentativas de entrada com esse e-mail. Aguarde cerca de
+          {{ minutosEspera }} {{ minutosEspera === 1 ? 'minuto' : 'minutos' }} e faça o login.
+        </p>
+        <p v-else>
+          Já existe um acesso com esse e-mail e não conseguimos entrar agora.
+          Suas respostas ficaram salvas neste navegador — faça o login para continuar.
+        </p>
+
+        <router-link
+          v-if="entradaFalha.code === 'ADMIN_PRECISA_SENHA'"
+          class="btn primary block" :to="{ name: 'acesso-interno' }"
+        >Ir para o acesso interno</router-link>
+        <router-link
+          v-else
+          class="btn primary block" :to="{ name: 'login', query: { email: emailReentrada } }"
+        >Ir para o login</router-link>
+      </div>
+
       <div v-if="erro" class="alert bad" role="alert" style="margin-top:14px">{{ erro }}</div>
 
-      <div class="nav">
+      <div v-if="!reentrando && !entradaFalha" class="nav">
         <button type="button" class="btn ghost" :disabled="passo === 0" @click="voltar">Voltar</button>
         <div class="nav-dir">
           <!-- Pular: perguntas opcionais e WhatsApp (não trava o funil) -->
@@ -545,6 +658,9 @@ watch(passo, () => { if (retomado.value && !enviando.value) retomado.value = fal
 
 .retomada { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px; margin-bottom: 14px; }
 .recomecar { font-size: inherit; text-decoration: underline; color: inherit; }
+
+.reentrada-falha p { margin: 0 0 12px; }
+.reentrada-falha .btn { min-height: 44px; }
 
 .q { flex: 1; }
 .q-label { font-size: 22px; font-weight: 700; line-height: 1.35; margin-bottom: 8px; letter-spacing: -0.01em; }

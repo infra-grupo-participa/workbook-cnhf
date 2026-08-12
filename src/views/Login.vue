@@ -6,7 +6,7 @@ import { entrar } from '../data/api.js'
 
 const router = useRouter()
 const route = useRoute()
-const email = ref('')
+const email = ref(typeof route.query.email === 'string' ? route.query.email : '')
 const erro = ref('')
 const codigoErro = ref('')
 const carregando = ref(false)

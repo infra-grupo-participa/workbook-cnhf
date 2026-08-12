@@ -9,6 +9,8 @@ import CtaGrupo from '../components/CtaGrupo.vue'
 import StatusSync from '../components/ui/StatusSync.vue'
 import ModalBase from '../components/ui/ModalBase.vue'
 import SumarioVivo from '../components/ui/SumarioVivo.vue'
+import ContagemAula from '../components/ui/ContagemAula.vue'
+import OnboardingModal from '../components/ui/OnboardingModal.vue'
 import { OPCOES_REF, rotuloRef } from '../components/ui/useRefsLivro.js'
 import { currentUser, getLead, logout, changePassword, listAnotacoes, criarAnotacao, isAdmin } from '../data/api.js'
 import { store } from '../data/store.js'
@@ -89,11 +91,21 @@ async function abrirSecao(id) {
   router.push({ name: 'workbook' })
 }
 
+// mini-onboarding do primeiro acesso. Só abre DEPOIS do store.init(), senão
+// quem já viu veria o modal de novo enquanto a leitura remota não voltasse.
+const onboarding = ref(null)
+function concluirOnboarding() { store.marcarOnboardingVisto() }
+function reabrirOnboarding() {
+  modalConta.value?.fechar()   // um <dialog> nativo por vez — evita empilhar modal sobre modal
+  onboarding.value?.abrir()
+}
+
 onMounted(async () => {
   const [l] = await Promise.all([getLead(email), store.init()])
   nome.value = (l && l.nome) || ''
   prontoProg.value = true
   notaRef.value = store.progresso.ultima_secao || ''
+  if (!store.progresso.onboarding_visto) onboarding.value?.abrir()
   notas.value = await listAnotacoes()
   ehAdmin.value = await isAdmin()
 })
@@ -205,6 +217,8 @@ const dataNota = (iso) => {
         </div>
       </section>
 
+      <ContagemAula />
+
       <CtaGrupo />
 
       <div class="colunas">
@@ -268,12 +282,18 @@ const dataNota = (iso) => {
       </div>
     </main>
 
+    <!-- primeiro acesso: o que é o workbook, como usar e quando começa -->
+    <OnboardingModal ref="onboarding" @concluir="concluirOnboarding" />
+
     <!-- CONTA: dados + trocar senha -->
     <ModalBase ref="modalConta" titulo="Sua conta">
       <dl class="conta-dados">
         <div><dt>Nome</dt><dd>{{ nome || '—' }}</dd></div>
         <div><dt>E-mail de acesso</dt><dd>{{ email }}</dd></div>
       </dl>
+      <button type="button" class="btn ghost block rever-onboarding" @click="reabrirOnboarding">
+        Rever boas-vindas
+      </button>
       <form v-if="ehAdmin" class="conta-form" @submit.prevent="salvarSenha">
         <h3>Trocar senha</h3>
         <label class="field" for="senha-atual"><span>Senha atual</span>
@@ -420,6 +440,7 @@ const dataNota = (iso) => {
 .conta-dados div { display: flex; justify-content: space-between; gap: 12px; font-size: 14px; }
 .conta-dados dt { color: var(--ink-2); font-weight: 600; }
 .conta-dados dd { margin: 0; text-align: right; overflow-wrap: anywhere; }
+.rever-onboarding { margin: 0 0 16px; }
 .conta-form { display: flex; flex-direction: column; gap: 12px; border-top: 1px solid var(--stroke); padding-top: 16px; }
 .conta-form h3 { margin: 0; font-size: 15px; }
 

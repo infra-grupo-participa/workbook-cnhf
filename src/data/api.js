@@ -247,6 +247,22 @@ export async function signUpComPesquisa({ email, nome, telefone, answers }) {
 }
 
 /**
+ * entrarComPesquisaExistente — o lead respondeu a pesquisa inteira, mas o
+ * e-mail já tem acesso (EXISTS no signUp). Em vez de barrar a pessoa com um
+ * texto morto, fazemos LOGIN CRU (entrar) e gravamos as respostas de novo:
+ * submitSurvey é upsert por user_id, então atualiza em vez de duplicar.
+ *
+ * Retorna { ok:true, surveyPending } em sucesso (já logado), ou
+ * { ok:false, code, retryAfterSeg, mensagem } propagado de `entrar`.
+ */
+export async function entrarComPesquisaExistente({ email, answers, nome, telefone }) {
+  const r = await entrar(email)
+  if (!r.ok) return { ok: false, code: r.code, retryAfterSeg: r.retryAfterSeg, mensagem: r.mensagem }
+  const reg = await submitSurvey(email, answers, nome, telefone)
+  return { ok: true, surveyPending: !reg?.ok }
+}
+
+/**
  * changePassword — auth nativo não checa a senha atual, então
  * revalidamos com um signIn silencioso para manter a UX de erro.
  */

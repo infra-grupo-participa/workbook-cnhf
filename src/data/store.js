@@ -19,7 +19,8 @@
      store.ultimaSync     ref<Date|null>
      store.pendentes      ref<number>
      await store.flush()
-     store.progresso      reactive<{ preenchidas, ultima_secao }>
+     store.progresso      reactive<{ preenchidas, ultima_secao, onboarding_visto }>
+     store.marcarOnboardingVisto()   // idempotente; persiste no próximo sync
 
    Observação de arquitetura: o push remoto envia SEMPRE o mapa
    local completo (não só os campos sujos). Combinado com o merge
@@ -92,16 +93,31 @@ export function contarPreenchidas(mapa) {
 
 /** aplica um save no "row" remoto: lê o estado atual, faz merge por campo
  *  e devolve o registro final. É a ÚNICA lógica de escrita — api.js usa
- *  esta função e os testes usam a mesma, garantindo paridade. */
+ *  esta função e os testes usam a mesma, garantindo paridade.
+ *
+ *  `progresso` é reconstruído por CIMA do que já existia na linha (spread de
+ *  `rowAtual.progresso` primeiro) — nunca do zero. Reconstruir do zero apaga
+ *  em silêncio qualquer chave que não seja `preenchidas`/`ultima_secao`
+ *  (ex.: `onboarding_visto`) no próximo save de lacuna. */
 export function aplicarSaveNoRow(rowAtual, respostasPatch, progresso) {
   const base = normalizarRespostas(rowAtual?.respostas)
   const merged = mergeRespostas(base, normalizarRespostas(respostasPatch))
   return {
     respostas: merged,
     progresso: {
+      ...(rowAtual?.progresso || {}),
+      ...(progresso || {}),
       preenchidas: contarPreenchidas(merged),
       ultima_secao:
         progresso?.ultima_secao ?? rowAtual?.progresso?.ultima_secao ?? null,
+      // one-way: uma vez true, nunca regride pra false. Sem isso, um init()
+      // que não leu o remoto a tempo (partida offline, o cenário-alvo durante
+      // a aula) parte de `onboarding_visto:false` local e o próximo save de
+      // lacuna apagava o `true` remoto por cima — o modal reabria pro aluno
+      // que já tinha visto.
+      onboarding_visto:
+        progresso?.onboarding_visto === true ||
+        rowAtual?.progresso?.onboarding_visto === true,
     },
   }
 }
@@ -193,7 +209,7 @@ export function criarStore(deps = {}) {
   const status = ref('salvo')                       // 'salvo'|'salvando'|'offline'|'erro'
   const ultimaSync = ref(null)                      // Date|null
   const pendentes = ref(0)                          // nº de campos ainda não sincronizados
-  const progresso = reactive({ preenchidas: 0, ultima_secao: null })
+  const progresso = reactive({ preenchidas: 0, ultima_secao: null, onboarding_visto: false })
 
   // --- estado interno ---
   let campos = {}                                   // { id: { v, t, dirty } } — verdade local
@@ -222,7 +238,11 @@ export function criarStore(deps = {}) {
     return out
   }
   function progressoAtual() {
-    return { preenchidas: progresso.preenchidas, ultima_secao: progresso.ultima_secao }
+    return {
+      preenchidas: progresso.preenchidas,
+      ultima_secao: progresso.ultima_secao,
+      onboarding_visto: progresso.onboarding_visto,
+    }
   }
 
   /**
@@ -246,6 +266,7 @@ export function criarStore(deps = {}) {
     for (const k of Object.keys(valores)) delete valores[k]   // muta o reactive
     progresso.preenchidas = 0
     progresso.ultima_secao = null
+    progresso.onboarding_visto = false
     pendentes.value = 0
     ultimaSync.value = null
     status.value = 'salvo'
@@ -281,6 +302,10 @@ export function criarStore(deps = {}) {
     }
     if (local.meta) {
       progresso.ultima_secao = local.meta.ultima_secao ?? null
+      // one-way: a meta local só é escrita quando `true` (ver
+      // marcarOnboardingVisto), então sua mera presença já confirma "visto"
+      // mesmo sem rede — é o que falta pro beacon não regredir a flag offline.
+      if (local.meta.onboarding_visto === true) progresso.onboarding_visto = true
     }
 
     // 2. remoto + merge por campo (maior t vence; legado t=0 nunca vence local)
@@ -297,7 +322,15 @@ export function criarStore(deps = {}) {
       if (!progresso.ultima_secao && remoto.progresso?.ultima_secao) {
         progresso.ultima_secao = remoto.progresso.ultima_secao
       }
+      // one-way: ausente (linha antiga, inclusive os 341 alunos de 11/08) = nunca
+      // viu; mas se o remoto já disser true, local nunca regride pra false.
+      progresso.onboarding_visto =
+        progresso.onboarding_visto === true || remoto.progresso?.onboarding_visto === true
     }
+    // se a leitura do remoto falhou (offline — o cenário-alvo durante a aula), o
+    // bloco acima nem roda; mas a meta local (passo 1) já cobre esse caso: uma
+    // vez visto, fica gravado no IndexedDB, então `progresso.onboarding_visto`
+    // segue `true` mesmo sem rede, e o beacon nunca reporta `false` por engano.
 
     // 3. espelha no estado reativo
     for (const [id, c] of Object.entries(campos)) valores[id] = c.v
@@ -360,12 +393,39 @@ export function criarStore(deps = {}) {
     }
   }, { deep: true })
 
+  // `gravarMeta` faz put() do objeto inteiro (sem merge) — sempre grava os dois
+  // campos juntos pra um watch não apagar o que o outro acabou de persistir.
+  function persistirMetaLocal() {
+    if (!storage) return
+    storage.gravarMeta(uid, {
+      ultima_secao: progresso.ultima_secao,
+      onboarding_visto: progresso.onboarding_visto === true,
+      t: now(),
+    }).catch(() => {})
+  }
+
   // troca de seção → persiste meta local e agenda sync leve
-  watch(() => progresso.ultima_secao, (s) => {
+  watch(() => progresso.ultima_secao, () => {
     if (!iniciado || !storage) return
-    storage.gravarMeta(uid, { ultima_secao: s, t: now() }).catch(() => {})
+    persistirMetaLocal()
     agendarSync()
   })
+
+  // onboarding visto → persiste meta local (defesa contra regressão offline,
+  // ver init()) e agenda sync (mesmo padrão do watch de ultima_secao acima)
+  watch(() => progresso.onboarding_visto, (v) => {
+    if (!iniciado || !v) return
+    persistirMetaLocal()
+    agendarSync()
+  })
+
+  /** marca o modal de onboarding como visto e agenda a persistência (mesma
+   *  trilha de sync do resto do store — debounce + retry + beacon). Chamar
+   *  ao fechar o modal no primeiro login. */
+  function marcarOnboardingVisto() {
+    if (progresso.onboarding_visto) return
+    progresso.onboarding_visto = true
+  }
 
   // ---------- agendamento ----------
   function agendarSync() {
@@ -463,7 +523,10 @@ export function criarStore(deps = {}) {
     if (pendentes.value > 0) await executarSync()
   }
 
-  return { init, reset, valores, get, set, status, ultimaSync, pendentes, flush, progresso }
+  return {
+    init, reset, valores, get, set, status, ultimaSync, pendentes, flush,
+    progresso, marcarOnboardingVisto,
+  }
 }
 
 // singleton consumido pelas views (CONTRATO 2)

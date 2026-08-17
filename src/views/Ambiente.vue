@@ -351,7 +351,8 @@ const dataNota = (iso) => {
 .capa:hover { transform: translateY(-4px) rotate(-0.6deg); box-shadow: 0 26px 46px rgba(16, 12, 6, 0.42), inset -2px 0 6px rgba(0, 0, 0, 0.4); }
 .capa-lombada {
   flex: 0 0 12px;
-  background: linear-gradient(90deg, var(--accent) 0%, #c85200 100%);
+  /* lombada: do laranja claro da Central ao queimado, como os botões de lá */
+  background: linear-gradient(90deg, var(--accent-strong) 0%, var(--accent) 100%);
   box-shadow: inset -2px 0 3px rgba(0, 0, 0, 0.35);
 }
 .capa-miolo {
@@ -390,7 +391,7 @@ const dataNota = (iso) => {
 .prog-num { font-size: 21px; font-weight: 800; color: var(--resposta); font-variant-numeric: tabular-nums; }
 .prog-txt { font-size: 13px; color: var(--ink-2); }
 .prog-bar { height: 7px; border-radius: 999px; background: var(--stroke); overflow: hidden; max-width: 420px; }
-.prog-fill { height: 100%; background: var(--accent); border-radius: 999px; transition: width 0.3s ease; }
+.prog-fill { height: 100%; background: var(--cta-gradiente); border-radius: 999px; transition: width 0.3s ease; }
 .prog-sk { height: 36px; max-width: 420px; border-radius: 8px; background: var(--stroke); opacity: 0.5; }
 
 .estante-acoes { display: flex; gap: 10px; margin-top: 18px; flex-wrap: wrap; }

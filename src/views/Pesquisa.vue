@@ -653,7 +653,8 @@ watch(passo, () => { if (retomado.value && !enviando.value) retomado.value = fal
 
 .progresso { margin: 14px 0 22px; }
 .barra { height: 8px; border-radius: 999px; background: var(--stroke); overflow: hidden; }
-.fill { height: 100%; background: var(--accent); border-radius: 999px; transition: width .35s cubic-bezier(.4,0,.2,1); }
+/* gradiente da Central, o mesmo do quadro de progresso de lá */
+.fill { height: 100%; background: var(--cta-gradiente); border-radius: 999px; transition: width .35s cubic-bezier(.4,0,.2,1); }
 .progresso-legenda { font-size: 12px; font-weight: 600; margin-top: 7px; text-align: right; letter-spacing: .01em; }
 
 .retomada { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px; margin-bottom: 14px; }

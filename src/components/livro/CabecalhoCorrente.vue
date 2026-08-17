@@ -146,7 +146,7 @@ const statusTitulo = computed(() =>
 .cc-status[data-s='erro'] .cc-ponto { background: var(--bad); }
 @keyframes cc-pulso { 50% { opacity: 0.35; } }
 .cc-fio { height: 2px; background: color-mix(in srgb, var(--pauta) 22%, transparent); }
-.cc-fio-fill { height: 100%; background: var(--accent); transition: width 0.3s ease; }
+.cc-fio-fill { height: 100%; background: var(--cta-gradiente); transition: width 0.3s ease; }
 
 @media (max-width: 720px) {
   .cc-tit { display: none; }

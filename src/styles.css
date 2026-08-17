@@ -28,24 +28,59 @@
   font-weight: 700; font-style: normal; font-display: swap;
 }
 
+/* Montserrat — a mesma da Central do CNHF, para os dois produtos lerem como
+   um só. Auto-hospedada (o app é PWA e roda offline; sem CDN). */
+@font-face {
+  font-family: 'Montserrat';
+  src: url('/fonts/montserrat-400.woff2') format('woff2');
+  font-weight: 400; font-style: normal; font-display: swap;
+}
+@font-face {
+  font-family: 'Montserrat';
+  src: url('/fonts/montserrat-500.woff2') format('woff2');
+  font-weight: 500; font-style: normal; font-display: swap;
+}
+@font-face {
+  font-family: 'Montserrat';
+  src: url('/fonts/montserrat-600.woff2') format('woff2');
+  font-weight: 600; font-style: normal; font-display: swap;
+}
+@font-face {
+  font-family: 'Montserrat';
+  src: url('/fonts/montserrat-700.woff2') format('woff2');
+  font-weight: 700; font-style: normal; font-display: swap;
+}
+@font-face {
+  font-family: 'Montserrat';
+  src: url('/fonts/montserrat-800.woff2') format('woff2');
+  font-weight: 800; font-style: normal; font-display: swap;
+}
+
 :root {
-  --accent: #ff6b00;
-  --accent-strong: #ff8a33;
-  --accent-soft: rgba(255, 107, 0, 0.12);
-  --accent-line: rgba(255, 107, 0, 0.5);
+  /* Laranja da Central (#eb7300) no lugar do #ff6b00. É meio tom mais
+     fechado e mede 3.42:1 com branco — ainda abaixo de AA para texto, então
+     a regra antiga continua valendo: marca em fios e indicadores, nunca sob
+     texto. Para texto/CTA existe --cta. */
+  --accent: #eb7300;
+  --accent-strong: #ff922a;   /* o mesmo do gradiente dos botões da Central */
+  --accent-soft: rgba(235, 115, 0, 0.12);
+  --accent-line: rgba(235, 115, 0, 0.5);
   /* CTA: laranja queimado com texto branco AA (4.82:1 / hover 5.23:1).
-     O #ff6b00 puro mede 2.86:1 com texto branco — segue como cor de marca
-     em fios, barras e indicadores NÃO-textuais, nunca sob texto. */
+     O laranja de marca puro reprova como fundo de texto — segue como cor de
+     marca em fios, barras e indicadores NÃO-textuais. */
   --cta: #c14e00;
   --cta-hover: #b84a00;
+  /* Gradiente dos botões primários, idêntico ao da Central. */
+  --cta-gradiente: linear-gradient(90deg, #ff922a 0%, #eb7300 100%);
   --ok: #2fbf71;
   --warn: #e2b93b;
   --bad: #e5533d;
   /* --bad é indicador (ponto/borda). Como TEXTO em fundo claro ele mede ~3.5:1
      e reprova AA — texto de erro/ação destrutiva usa --bad-text. */
   --bad-text: #b02c17;
-  --radius: 16px;
-  --radius-sm: 10px;
+  /* Raios da Central: cartões 14px, controles 8px. */
+  --radius: 14px;
+  --radius-sm: 8px;
 
   /* famílias: serifa para o corpo do livro, grotesk só para o chrome da UI.
      A Literata SÓ entra depois que carrega (html[data-fontes='ok'], setado
@@ -56,6 +91,9 @@
      Assim, campo e prosa trocam de fonte JUNTOS (ou ficam juntos no
      fallback — que é a mesma stack serifada do PDF). */
   --fonte-livro: 'Iowan Old Style', 'Palatino Linotype', Palatino, Georgia, serif;
+  /* Montserrat só entra depois de carregar (html[data-fontes='ok']) — mesma
+     razão da Literata: o Chromium não refaz o layout de input/textarea
+     quando a webfont chega, e o campo ficaria preso no fallback. */
   --fonte-ui: -apple-system, 'Segoe UI', Inter, Roboto, sans-serif;
   --fonte-corpo: var(--fonte-livro);   /* trocável no painel de leitura */
   font-family: var(--fonte-ui);
@@ -76,16 +114,20 @@
   --pauta: #9b7c55;
   --pauta-suave: rgba(155, 124, 85, 0.45);
 
-  --bg: #f4f4f6;
-  --bg-orb: rgba(255, 107, 0, 0.10);
+  /* Escala de cinzas da Central (Untitled UI). Substitui os rgba() sobre
+     #14141a por cores sólidas — os mesmos hex do outro produto.
+     Contraste sobre --surface #fff:  ink 16.9:1 · ink-2 7.5:1 · ink-3 4.6:1
+     (todos ≥AA, incluindo ink-3 que antes media 4.4:1). */
+  --bg: #f8fafc;
+  --bg-orb: rgba(235, 115, 0, 0.10);
   --surface: #ffffff;
   --glass: rgba(255, 255, 255, 0.75);
-  --stroke: rgba(16, 16, 20, 0.10);
-  --stroke-strong: rgba(16, 16, 20, 0.2);
-  --ink: #14141a;
-  --ink-2: rgba(20, 20, 26, 0.62);
-  --ink-3: rgba(20, 20, 26, 0.4);
-  --shadow: 0 14px 40px rgba(16, 16, 20, 0.10);
+  --stroke: #e4e7ec;
+  --stroke-strong: #d0d5dd;
+  --ink: #101828;
+  --ink-2: #475467;
+  --ink-3: #667085;
+  --shadow: 0 14px 40px rgba(16, 24, 40, 0.08);
   color-scheme: light;
 }
 /* ---- tema SÉPIA (leitor de livros) ---- */
@@ -143,6 +185,7 @@
 /* ---- preferências de leitura (persistidas pelo painel) ---- */
 :root[data-fontes='ok'] {
   --fonte-livro: 'Literata', 'Iowan Old Style', 'Palatino Linotype', Palatino, Georgia, serif;
+  --fonte-ui: 'Montserrat', -apple-system, 'Segoe UI', Inter, Roboto, sans-serif;
 }
 :root[data-fs='1'] { --fs-livro: 1rem; }         /* 16px */
 :root[data-fs='3'] { --fs-livro: 1.21875rem; }   /* 19.5px */
@@ -189,8 +232,22 @@ h1, h2, h3 { letter-spacing: -0.01em; }
 .btn:hover { border-color: var(--accent-line); }
 .btn:active { transform: scale(.98); }
 .btn:disabled { opacity: .5; cursor: not-allowed; }
-.btn.primary { background: var(--cta); border-color: var(--cta); color: #fff; }
-.btn.primary:hover { background: var(--cta-hover); border-color: var(--cta-hover); }
+/* Gradiente laranja da Central. O `background-color` embaixo é o que os
+   leitores de contraste medem e o que aparece se o gradiente falhar —
+   por isso é o --cta (4.82:1 com branco), não o laranja de marca. */
+.btn.primary {
+  background-color: var(--cta);
+  background-image: var(--cta-gradiente);
+  border-color: transparent; color: #fff; font-weight: 700;
+  box-shadow: 0 2px 8px rgba(235, 115, 0, 0.25);
+}
+.btn.primary:hover {
+  background-color: var(--cta-hover);
+  filter: brightness(1.05);
+  transform: translateY(-1px);
+  box-shadow: 0 6px 18px rgba(235, 115, 0, 0.35);
+}
+.btn.primary:active { transform: translateY(0) scale(.98); }
 .btn.block { width: 100%; }
 .btn.ghost { background: transparent; }
 
@@ -222,10 +279,12 @@ input:-webkit-autofill, input:-webkit-autofill:focus {
 }
 textarea { resize: vertical; min-height: 90px; }
 
+/* Alertas na paleta da Central (mesmos hex do sucesso/erro de lá).
+   Contrastes sobre o próprio fundo: ok 4.9:1 · bad 5.9:1 · warn 5.1:1. */
 .alert { border-radius: var(--radius-sm); padding: 11px 14px; font-size: 13.5px; line-height: 1.5; border: 1px solid; }
-.alert.warn { color: #8a5a00; background: #fff6e6; border-color: #f0d28a; }
-.alert.bad { color: #8a2a1c; background: #fdecea; border-color: #f2b3aa; }
-.alert.ok { color: #1c6b45; background: #e9f8f0; border-color: #a8e0c4; }
+.alert.warn { color: #b54708; background: #fff8f2; border-color: #fedf89; }
+.alert.bad { color: #b42318; background: #fef3f2; border-color: #fecdca; }
+.alert.ok { color: #027a48; background: #ecfdf3; border-color: #abefc6; }
 :root[data-theme='dark'] .alert.warn { color: #ffd782; background: rgba(226,185,59,.1); }
 :root[data-theme='dark'] .alert.bad { color: #ff9d90; background: rgba(229,83,61,.12); }
 :root[data-theme='dark'] .alert.ok { color: #86e3b4; background: rgba(47,191,113,.12); }

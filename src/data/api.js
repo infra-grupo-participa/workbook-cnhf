@@ -293,8 +293,29 @@ export async function submitSurvey(_email, answers, nome, telefone) {
   if (!uid) return { ok: false, code: 'NO_SESSION' }
   const email = currentUser()
 
-  // índice de saúde da resposta (qualidade + flags de priorização)
-  const { score, flags } = avaliarSaude({ nome: nome ?? _perfil?.nome, email, answers })
+  // MERGE com o `answers` já gravado (2026-08-18, registro curto): quem já
+  // respondeu a pesquisa longa tem 4 respostas abertas que o registro curto
+  // (só área + faturamento) NÃO pode apagar. As chaves do payload atual
+  // VENCEM; as antigas que não vieram são PRESERVADAS. Só há o que mesclar
+  // se já existir linha — senão o comportamento é idêntico ao de sempre.
+  // Se a LEITURA falhar (rede/timeout), NAO gravamos as cegas: um upsert sem
+  // o merge apagaria as respostas abertas de um aluno real. Mesma regra do
+  // saveWorkbook. O chamador ja trata !ok (o acesso e o entregavel; o registro
+  // curto retenta).
+  let answersFinal = answers
+  const { data: existente, error: erroLeitura } = await supabase
+    .from('respostas_pesquisa')
+    .select('answers')
+    .eq('user_id', uid)
+    .maybeSingle()
+  if (erroLeitura) return { ok: false, code: 'ERROR', message: erroLeitura.message }
+  if (existente?.answers && typeof existente.answers === 'object') {
+    answersFinal = { ...existente.answers, ...answers }
+  }
+
+  // índice de saúde: sempre sobre o MESCLADO — senão quem já tinha score bom
+  // (pesquisa longa completa) seria rebaixado por um payload curto.
+  const { score, flags } = avaliarSaude({ nome: nome ?? _perfil?.nome, email, answers: answersFinal })
 
   // deduplicação: já existe outra resposta com o mesmo e-mail ou telefone?
   const duplicado = await ehDuplicado({ uid, email, telefone })
@@ -304,7 +325,7 @@ export async function submitSurvey(_email, answers, nome, telefone) {
     email,
     nome: nome ?? _perfil?.nome ?? '',
     telefone: telefone || null,
-    answers,
+    answers: answersFinal,
     health_score: score,
     health_flags: flags,
     duplicado,

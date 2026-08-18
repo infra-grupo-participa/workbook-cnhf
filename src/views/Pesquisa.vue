@@ -4,6 +4,7 @@ import { useRoute, useRouter } from 'vue-router'
 import LogoCNHF from '../components/LogoCNHF.vue'
 import { SURVEY } from '../data/survey-schema.js'
 import { currentUser, submitSurvey, signUpComPesquisa, entrarComPesquisaExistente } from '../data/api.js'
+import { checarNome, checarEmail, checarWhats, normalizarNome, mascararTelefone } from '../data/validacao-contato.js'
 
 const route = useRoute()
 const router = useRouter()
@@ -153,7 +154,7 @@ const etapasTotais = modoPublico ? TOTAL + 3 : TOTAL
 // quantas telas ainda faltam (p/ a contagem regressiva)
 const faltam = computed(() => Math.max(0, etapasTotais - 1 - passo.value))
 const preenchidoAtual = computed(() => {
-  if (noEmail.value) return !checarEmail()
+  if (noEmail.value) return !checarEmail(contato.value.email)
   if (naPergunta.value) {
     // pergunta opcional → sempre pode avançar (com ou sem resposta)
     if (!atual.value.obrigatoria) return true
@@ -169,59 +170,18 @@ const preenchidoAtual = computed(() => {
     return true
   }
   if (noWhats.value) return true          // WhatsApp é opcional
-  if (noNome.value) return !checarNome()
+  if (noNome.value) return !checarNome(contato.value.nome)
   return false
 })
 
 // erros por campo
 const erros = ref({ nome: '', email: '', telefone: '' })
-const emailValido = (e) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(e || '').trim())
 
-// --- formatadores (evitam dado quebrado entrando na planilha) ---
-function normalizarNome(v) {
-  const minus = new Set(['de', 'da', 'do', 'das', 'dos', 'e'])
-  return String(v || '').trim().replace(/\s+/g, ' ').toLowerCase()
-    .split(' ')
-    .map((w) => (minus.has(w) ? w : w.charAt(0).toUpperCase() + w.slice(1)))
-    .join(' ')
-}
-function blurNome() { contato.value.nome = normalizarNome(contato.value.nome); erros.value.nome = checarNome() }
-function blurEmail() { contato.value.email = String(contato.value.email || '').trim().toLowerCase(); erros.value.email = checarEmail() }
-function blurWhats() { erros.value.telefone = checarWhats() }
-
-// máscara de telefone em tempo real: (XX) XXXXX-XXXX. Digitação vira máscara;
-// colagem em qualquer formato é aceita (+55, pontos, espaços) — o +55 é
-// descartado só para exibição; o servidor normaliza de verdade.
-function mascararTelefone(v) {
-  let d = String(v || '').replace(/\D/g, '')
-  if (d.length > 11 && d.startsWith('55')) d = d.slice(2)   // colou com +55
-  d = d.slice(0, 11)
-  if (d.length === 0) return ''
-  if (d.length <= 2) return `(${d}`
-  if (d.length <= 6) return d.replace(/^(\d{2})(\d*)/, '($1) $2')
-  if (d.length <= 10) return d.replace(/^(\d{2})(\d{4})(\d*)/, '($1) $2-$3')
-  return d.replace(/^(\d{2})(\d{5})(\d*)/, '($1) $2-$3')
-}
-
-function checarNome() {
-  const n = normalizarNome(contato.value.nome)
-  if (!n) return 'Informe o seu nome completo.'
-  if (n.length < 3 || !/\s/.test(n)) return 'Informe nome e sobrenome.'
-  if (!/^[A-Za-zÀ-ÿ'’\s-]+$/.test(n)) return 'Use apenas letras no nome.'
-  return ''
-}
-function checarEmail() {
-  const e = String(contato.value.email || '').trim().toLowerCase()
-  if (!e) return 'Informe o seu e-mail.'
-  if (!emailValido(e)) return 'Informe um e-mail válido (ex.: nome@email.com).'
-  return ''
-}
-function checarWhats() {
-  const d = String(contato.value.telefone || '').replace(/\D/g, '')
-  if (!d) return ''                       // opcional: vazio é permitido
-  if (d.length < 10 || d.length > 11) return 'Informe o DDD + número completo.'
-  return ''
-}
+// formatadores/validadores vêm de validacao-contato.js (funções puras —
+// recebem o valor por parâmetro em vez de ler `contato.value`)
+function blurNome() { contato.value.nome = normalizarNome(contato.value.nome); erros.value.nome = checarNome(contato.value.nome) }
+function blurEmail() { contato.value.email = String(contato.value.email || '').trim().toLowerCase(); erros.value.email = checarEmail(contato.value.email) }
+function blurWhats() { erros.value.telefone = checarWhats(contato.value.telefone) }
 
 // sub-campo condicional revelado pela opção escolhida na pergunta atual
 const condicionalAtual = computed(() => {
@@ -284,7 +244,7 @@ function avancar() {
   if (enviando.value) return   // Enter repetido durante o envio não reabre o fluxo
   erro.value = ''
   if (noEmail.value) {
-    erros.value.email = checarEmail()
+    erros.value.email = checarEmail(contato.value.email)
     if (erros.value.email) return          // o erro do campo (aria-live) basta
     contato.value.email = contato.value.email.trim().toLowerCase()
     passo.value++
@@ -303,13 +263,13 @@ function avancar() {
     return
   }
   if (noWhats.value) {
-    erros.value.telefone = checarWhats()
+    erros.value.telefone = checarWhats(contato.value.telefone)
     if (erros.value.telefone) return
     passo.value++
     return
   }
   if (noNome.value) {
-    erros.value.nome = checarNome()
+    erros.value.nome = checarNome(contato.value.nome)
     if (erros.value.nome) return
     contato.value.nome = normalizarNome(contato.value.nome)
     return finalizar()

@@ -73,9 +73,9 @@ async function fazerLogin() {
 
         <router-link
           v-if="codigoErro === 'NAO_CADASTRADO'"
-          class="btn primary block" :to="{ name: 'pesquisa' }"
+          class="btn primary block" :to="{ name: 'registrar', query: { email } }"
         >
-          Responder a pesquisa e liberar meu acesso
+          Criar meu acesso
         </router-link>
         <button v-else class="btn primary block" :disabled="!podeEnviar">
           {{ carregando ? 'Entrando...' : 'Entrar' }}
@@ -83,11 +83,11 @@ async function fazerLogin() {
       </form>
 
       <p v-if="codigoErro === 'NAO_CADASTRADO'" class="ajuda muted">
-        Ao responder a pesquisa rápida, o seu acesso ao workbook é liberado no final.
+        Leva menos de 1 minuto — assim que criar o seu acesso, o workbook já é liberado.
       </p>
 
       <div class="rodape">
-        <router-link class="link" :to="{ name: 'pesquisa' }">Ainda não tenho acesso</router-link>
+        <router-link class="link" :to="{ name: 'registrar', query: { email } }">Ainda não tenho acesso</router-link>
       </div>
     </div>
   </div>

@@ -681,7 +681,7 @@ watch(passo, () => { if (retomado.value && !enviando.value) retomado.value = fal
   background: var(--surface); cursor: pointer;
   transition: border-color .14s, background .14s, transform .08s, box-shadow .14s;
 }
-.op:hover { border-color: var(--accent-line); box-shadow: 0 2px 12px rgba(255,107,0,.07); }
+.op:hover { border-color: var(--accent-line); box-shadow: 0 2px 12px rgba(235,115,0,.07); }
 .op:active { transform: scale(.99); }
 .op.sel { border-color: var(--accent); background: var(--accent-soft); font-weight: 600; box-shadow: 0 0 0 3px var(--accent-soft); }
 

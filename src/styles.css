@@ -133,7 +133,7 @@
 /* ---- tema SÉPIA (leitor de livros) ---- */
 :root[data-theme='sepia'] {
   --bg: #ece2cd;
-  --bg-orb: rgba(255, 107, 0, 0.07);
+  --bg-orb: rgba(235, 115, 0, 0.07);
   --surface: #f7f0e1;
   --glass: rgba(247, 240, 225, 0.78);
   --stroke: rgba(58, 47, 32, 0.14);
@@ -158,7 +158,7 @@
 
 :root[data-theme='dark'] {
   --bg: #0b0b0e;
-  --bg-orb: rgba(255, 107, 0, 0.14);
+  --bg-orb: rgba(235, 115, 0, 0.14);
   --surface: #16161b;
   --glass: rgba(255, 255, 255, 0.05);
   --stroke: rgba(255, 255, 255, 0.11);
